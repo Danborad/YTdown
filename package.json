@@ -1,0 +1,67 @@
+{
+  "name": "yt-downloader",
+  "version": "1.0.0",
+  "description": "YT下载器 - Electron 版",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "prebuild": "yt-dlp.exe -U",
+    "build": "electron-builder"
+  },
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.1"
+  },
+  "build": {
+    "appId": "com.yt.downloader",
+    "productName": "YT下载器",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "icon.ico",
+      "icon.png",
+      "src/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "yt-dlp.exe",
+        "to": "."
+      },
+      {
+        "from": "ffmpeg.exe",
+        "to": "."
+      },
+      {
+        "from": "browser-extension",
+        "to": "browser-extension"
+      },
+      {
+        "from": "node-runtime",
+        "to": "node-runtime"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "artifactName": "${productName} Setup ${version}.${ext}"
+    }
+  }
+}

@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>YT下载器 Cookie Sync</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: "Segoe UI", sans-serif;
+      background: linear-gradient(180deg, #f7faff 0%, #eef4ff 100%);
+      color: #162033;
+      width: 360px;
+    }
+    .wrap {
+      padding: 16px;
+    }
+    .card {
+      background: #fff;
+      border: 1px solid #dbe6ff;
+      border-radius: 16px;
+      padding: 14px;
+      box-shadow: 0 10px 30px rgba(66, 133, 244, 0.08);
+      margin-bottom: 12px;
+    }
+    .title {
+      font-size: 16px;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+    .muted {
+      color: #697791;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .label {
+      font-size: 12px;
+      color: #4a5a78;
+      margin-bottom: 6px;
+      display: block;
+      font-weight: 600;
+    }
+    input {
+      width: 100%;
+      box-sizing: border-box;
+      border: 1px solid #c7d7ff;
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: 13px;
+      outline: none;
+    }
+    input:focus {
+      border-color: #4c84ff;
+      box-shadow: 0 0 0 3px rgba(76, 132, 255, 0.15);
+    }
+    .row {
+      display: flex;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    button {
+      flex: 1;
+      border: 0;
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .primary {
+      background: linear-gradient(135deg, #3f82ff 0%, #2563eb 100%);
+      color: #fff;
+    }
+    .secondary {
+      background: #edf3ff;
+      color: #3154a4;
+    }
+    .status {
+      font-size: 13px;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+    .error {
+      color: #c23636;
+      font-size: 12px;
+      line-height: 1.5;
+      min-height: 18px;
+      margin-top: 8px;
+    }
+    .meta {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .pill {
+      background: #f5f8ff;
+      border-radius: 12px;
+      padding: 10px;
+    }
+    .pill strong {
+      display: block;
+      font-size: 11px;
+      color: #49607d;
+      margin-bottom: 4px;
+    }
+    .pill span {
+      font-size: 12px;
+      color: #14213d;
+      word-break: break-all;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="title">YT下载器 同步插件</div>
+      <div class="muted">在下载器中复制配对码，输入后即可自动把浏览器 Cookie 同步到本地下载器。</div>
+    </div>
+
+    <div class="card">
+      <div id="status" class="status">未连接下载器</div>
+      <label class="label" for="token">配对码</label>
+      <input id="token" type="text" placeholder="输入下载器里显示的 8 位配对码">
+      <div class="row">
+        <button id="connect-btn" class="primary">连接并同步</button>
+        <button id="sync-btn" class="secondary">立即同步</button>
+      </div>
+      <div id="error" class="error"></div>
+      <div class="meta">
+        <div class="pill">
+          <strong>浏览器</strong>
+          <span id="browser-name">-</span>
+        </div>
+        <div class="pill">
+          <strong>最近同步</strong>
+          <span id="last-sync">未同步</span>
+        </div>
+        <div class="pill">
+          <strong>Cookie 数量</strong>
+          <span id="last-count">0</span>
+        </div>
+        <div class="pill">
+          <strong>当前状态</strong>
+          <span id="paired-state">未配对</span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+node_modules/
+dist/
+chrome-win64/
+config.json
+tasks.json
+*.log
+*.tmp
+*.temp
+*.part
+*.ytdl
+.DS_Store
+Thumbs.db

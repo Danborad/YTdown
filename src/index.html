@@ -1,0 +1,1944 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https:;">
+    <title>YT下载器</title>
+    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    <script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "primary": "#3B82F6",
+                        "primary-hover": "#2563EB",
+                        "bg-global": "#F5F7FA",
+                        "bg-card": "#FFFFFF",
+                        "text-primary": "#1A1C1E",
+                        "text-secondary": "#94A3B8",
+                    },
+                    fontFamily: {
+                        "display": ["Inter", "-apple-system", "BlinkMacSystemFont", "Segoe UI", "sans-serif"]
+                    },
+                    boxShadow: {
+                        "card": "0 8px 30px rgb(0 0 0 / 0.04)",
+                        "card-hover": "0 12px 40px rgb(0 0 0 / 0.08)",
+                        "input": "0 4px 20px rgb(0 0 0 / 0.03)",
+                        "input-focus": "0 8px 30px rgb(0 0 0 / 0.08)",
+                        "button": "0 4px 14px rgb(59 130 246 / 0.35)",
+                    },
+                    borderRadius: {
+                        "2xl": "1rem",
+                        "3xl": "1.5rem",
+                        "4xl": "2rem",
+                    },
+                },
+            },
+        }
+    </script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+        rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap"
+        rel="stylesheet" />
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #E2E8F0;
+            border-radius: 3px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #CBD5E1;
+        }
+
+        .sidebar-item {
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .sidebar-item:hover {
+            background: white;
+            box-shadow: 0 2px 12px rgb(0 0 0 / 0.04);
+        }
+
+        .sidebar-item.active {
+            background: white;
+            box-shadow: 0 2px 12px rgb(0 0 0 / 0.06);
+        }
+
+        .card-hover {
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .card-hover:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 12px 40px rgb(0 0 0 / 0.08);
+        }
+
+        .input-capsule {
+            transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .input-capsule:focus-within {
+            box-shadow: 0 8px 30px rgb(0 0 0 / 0.08);
+            border-color: #3B82F6;
+        }
+
+        @keyframes shimmer {
+            0% {
+                transform: translateX(-100%);
+            }
+
+            100% {
+                transform: translateX(100%);
+            }
+        }
+
+        .btn-primary:active {
+            transform: scale(0.97);
+        }
+
+        .icon-neutral {
+            color: #94A3B8;
+            transition: color 0.2s ease;
+        }
+
+        @keyframes fade-in {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .animate-fade-in {
+            animation: fade-in 0.3s ease-out;
+        }
+    </style>
+</head>
+
+<body class="bg-[#F5F7FA] text-[#1A1C1E] h-screen flex overflow-hidden">
+
+    <!-- ========== SIDEBAR ========== -->
+    <aside class="w-[236px] bg-transparent flex flex-col justify-between shrink-0 p-4">
+        <div class="flex flex-col gap-6">
+            <div class="flex items-center gap-3 px-2 py-2">
+                <div class="w-11 h-11 rounded-2xl overflow-hidden shadow-button shrink-0 bg-slate-900/5">
+                    <img src="../icon.png" alt="YT下载器" class="w-full h-full object-cover">
+                </div>
+                <h1 class="text-[#1A1C1E] text-xl font-bold tracking-tight">YT下载器</h1>
+            </div>
+            <nav class="flex flex-col gap-1.5">
+                <a id="nav-all-tasks" class="sidebar-item active flex items-center gap-3 px-4 py-3 rounded-2xl"
+                    href="#">
+                    <span class="material-symbols-outlined text-[22px] text-primary"
+                        style="font-variation-settings: 'FILL' 1;">dashboard</span>
+                    <span class="text-sm font-semibold text-[#1A1C1E]">全部任务</span>
+                </a>
+                <a id="nav-completed" class="sidebar-item flex items-center gap-3 px-4 py-3 rounded-2xl text-slate-500"
+                    href="#">
+                    <span class="material-symbols-outlined text-[22px] icon-neutral">check_circle</span>
+                    <span class="text-sm font-medium">已完成</span>
+                </a>
+            </nav>
+        </div>
+        <div class="flex flex-col gap-2">
+            <a id="nav-help" class="sidebar-item flex items-center gap-3 px-4 py-3 rounded-2xl text-slate-500" href="#">
+                <span class="material-symbols-outlined text-[22px] icon-neutral">help</span>
+                <span class="text-sm font-medium">使用说明</span>
+            </a>
+            <a id="nav-logs" class="sidebar-item flex items-center gap-3 px-4 py-3 rounded-2xl text-slate-500" href="#">
+                <span class="material-symbols-outlined text-[22px] icon-neutral">terminal</span>
+                <span class="text-sm font-medium">系统日志</span>
+            </a>
+            <a id="nav-settings" class="sidebar-item flex items-center gap-3 px-4 py-3 rounded-2xl text-slate-500"
+                href="#">
+                <span class="material-symbols-outlined text-[22px] icon-neutral">settings</span>
+                <span class="text-sm font-medium">通用设置</span>
+            </a>
+        </div>
+    </aside>
+
+    <!-- ========== MAIN CONTENT ========== -->
+    <main class="flex-1 flex flex-col h-full overflow-hidden py-4 pr-4">
+        <div class="flex-1 flex flex-col bg-white rounded-[32px] shadow-card overflow-hidden">
+
+            <!-- Header: New Download Section -->
+            <div id="view-input">
+                <header class="shrink-0 px-8 pt-7 pb-5">
+                    <div class="flex flex-col gap-5">
+                        <div class="flex items-start justify-between">
+                            <div class="flex flex-col gap-2">
+                                <h2 class="text-[24px] font-bold text-[#1A1C1E] tracking-tight">开始新下载</h2>
+                                <p class="text-slate-400 text-[14px]">粘贴来自 YouTube, Vimeo, Bilibili, Pinterest
+                                    或其他支持站点的链接。
+                                </p>
+                            </div>
+                            <button onclick="openRepository()"
+                                class="flex items-center gap-1.5 px-3 py-1.5 text-slate-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition-all text-xs"
+                                title="打开 GitHub 仓库">
+                                <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current" aria-hidden="true">
+                                    <path d="M12 .5C5.649.5.5 5.649.5 12c0 5.084 3.292 9.4 7.861 10.922.575.106.785-.25.785-.557 0-.274-.01-1-.016-1.962-3.198.695-3.874-1.541-3.874-1.541-.523-1.33-1.277-1.684-1.277-1.684-1.044-.714.08-.699.08-.699 1.154.081 1.761 1.185 1.761 1.185 1.025 1.758 2.689 1.25 3.344.956.104-.743.401-1.25.729-1.538-2.553-.29-5.236-1.276-5.236-5.682 0-1.255.448-2.282 1.183-3.086-.119-.29-.513-1.458.112-3.04 0 0 .966-.309 3.165 1.18A10.98 10.98 0 0 1 12 5.84c.975.004 1.957.132 2.874.387 2.198-1.489 3.162-1.18 3.162-1.18.627 1.582.233 2.75.114 3.04.737.804 1.181 1.831 1.181 3.086 0 4.417-2.687 5.389-5.248 5.673.412.354.779 1.052.779 2.12 0 1.53-.014 2.763-.014 3.139 0 .309.207.668.79.555A11.503 11.503 0 0 0 23.5 12C23.5 5.649 18.351.5 12 .5Z" />
+                                </svg>
+                                反馈
+                            </button>
+                        </div>
+                        <div
+                            class="input-capsule flex items-center gap-3 bg-[#F8FAFC] border border-slate-200/80 rounded-[18px] px-4 py-3 shadow-input">
+                            <span class="material-symbols-outlined text-[22px] text-slate-400">link</span>
+                            <input id="url-input"
+                                class="flex-1 bg-transparent border-none text-[#1A1C1E] text-base placeholder:text-slate-400 focus:outline-none focus:ring-0"
+                                placeholder="在此粘贴视频链接..." type="text" />
+                            <div class="flex items-center gap-3">
+                                <button id="paste-btn"
+                                    class="flex items-center gap-2 px-4 py-2 text-slate-500 hover:text-slate-700 hover:bg-white rounded-xl transition-all text-sm font-medium">
+                                    <span class="material-symbols-outlined text-[20px]">content_paste</span>
+                                    粘贴
+                                </button>
+                                <button id="download-btn"
+                                    class="btn-primary flex items-center justify-center px-6 py-2.5 bg-primary hover:bg-primary-hover text-white text-sm font-bold rounded-2xl shadow-button transition-all">
+                                    立即下载
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </header>
+            </div>
+
+            <!-- Scrollable Content Area -->
+            <div class="flex-1 overflow-y-auto px-8 pb-8">
+                <div class="flex flex-col gap-5">
+
+                    <!-- Settings Row: Cookie + General -->
+                    <div id="view-settings" class="view-section hidden">
+                        <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
+
+                            <!-- Cookie Configuration Card (2/3 width) -->
+                            <section
+                                class="lg:col-span-2 bg-[#FAFBFC] rounded-[20px] border border-slate-100 overflow-hidden card-hover">
+                                <div class="px-4 py-2 flex items-center justify-between border-b border-slate-100">
+                                    <div class="flex items-center gap-2">
+                                        <div class="flex items-center justify-center w-6 h-6 bg-amber-100 rounded-md">
+                                            <span class="material-symbols-outlined text-[14px] text-amber-600"
+                                                style="font-variation-settings: 'FILL' 1;">cookie</span>
+                                        </div>
+                                        <h3 class="font-bold text-xs text-[#1A1C1E]">Cookie 配置</h3>
+                                    </div>
+                                    <span
+                                        class="text-[9px] text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">会员视频 / 登录限制</span>
+                                </div>
+                                <div class="p-1.5">
+                                    <div id="cookie-sync-card"
+                                        class="relative bg-white border border-slate-100 rounded-xl p-2 flex flex-col gap-1.5">
+                                        <div id="indicator-plugin-sync" class="hidden absolute top-3 right-3">
+                                            <span class="material-symbols-outlined text-green-500 text-[16px]">check_circle</span>
+                                        </div>
+                                        <div class="grid grid-cols-[minmax(0,1fr)_auto] gap-2 items-center pr-7">
+                                            <div class="min-w-0 flex items-center gap-2 flex-wrap">
+                                                <span class="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-blue-50 text-[10px] font-bold text-blue-600">
+                                                        <span class="material-symbols-outlined text-[14px]">extension</span>
+                                                        自动同步
+                                                </span>
+                                                <span class="text-[10px] text-slate-400">推荐</span>
+                                                <div class="text-[11px] font-bold text-slate-800">浏览器插件实时同步 Cookie</div>
+                                            </div>
+                                            <span id="cookie-sync-source-pill"
+                                                class="shrink-0 px-2 py-1 rounded-full text-[9px] font-bold bg-slate-100 text-slate-500">未启用</span>
+                                        </div>
+
+                                        <div class="grid grid-cols-2 lg:grid-cols-4 gap-1">
+                                            <div class="rounded-lg border border-slate-100 bg-slate-50 px-2 py-1.5">
+                                                <div class="text-[9px] text-slate-400">连接状态</div>
+                                                <div id="cookie-sync-state" class="text-[11px] font-bold text-slate-700 mt-0.5">等待配对</div>
+                                            </div>
+                                            <div class="rounded-lg border border-slate-100 bg-slate-50 px-2 py-1.5">
+                                                <div class="text-[9px] text-slate-400">来源浏览器</div>
+                                                <div id="cookie-sync-browser" class="text-[11px] font-bold text-slate-700 mt-0.5">未连接</div>
+                                            </div>
+                                            <div class="rounded-lg border border-slate-100 bg-slate-50 px-2 py-1.5">
+                                                <div class="text-[9px] text-slate-400">同步数量</div>
+                                                <div id="cookie-sync-count" class="text-[11px] font-bold text-slate-700 mt-0.5">0 个 Cookie</div>
+                                            </div>
+                                            <div class="rounded-lg border border-slate-100 bg-slate-50 px-2 py-1.5">
+                                                <div class="text-[9px] text-slate-400">最近同步</div>
+                                                <div id="cookie-sync-last-sync" class="text-[11px] font-bold text-slate-700 mt-0.5">尚未同步</div>
+                                            </div>
+                                        </div>
+
+                                        <div class="grid grid-cols-[132px_minmax(0,1fr)] gap-1 items-stretch">
+                                            <div class="rounded-lg border border-slate-100 bg-slate-50 px-2 py-1 min-w-0">
+                                                <div class="flex items-center justify-between gap-2 mb-0.5">
+                                                    <span id="cookie-sync-token-label" class="text-[9px] text-slate-400">配对码</span>
+                                                    <button onclick="handleCopyCookieSyncToken()"
+                                                        class="text-[10px] text-blue-500 hover:text-blue-700 font-bold">复制</button>
+                                                </div>
+                                                <div id="cookie-sync-token"
+                                                    class="font-mono text-[12px] font-bold tracking-[0.18em] text-slate-700 truncate">--------</div>
+                                            </div>
+                                            <div class="grid grid-cols-3 gap-1">
+                                                <button onclick="handleOpenExtensionFolder()"
+                                                    class="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-bold rounded-lg transition-all">打开插件目录</button>
+                                                <button onclick="handleActivatePluginSource()"
+                                                    id="btn-activate-plugin-source"
+                                                    class="px-2 py-1 bg-blue-500 hover:bg-blue-600 text-white text-[10px] font-bold rounded-lg transition-all">启用插件同步</button>
+                                                <button onclick="handleResetCookieSyncToken()"
+                                                    class="px-2 py-1 bg-white border border-slate-200 hover:border-blue-300 hover:bg-blue-50 text-slate-600 text-[10px] font-bold rounded-lg transition-all">重置配对</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </section>
+
+                            <!-- General Settings Card (1/3 width) -->
+                            <section
+                                class="lg:col-span-1 bg-[#FAFBFC] rounded-[20px] border border-slate-100 overflow-hidden card-hover">
+                                <div class="px-4 py-2.5 flex items-center gap-2 border-b border-slate-100">
+                                    <div class="flex items-center justify-center w-6 h-6 bg-slate-200 rounded-md">
+                                        <span
+                                            class="material-symbols-outlined text-[14px] text-slate-600">settings</span>
+                                    </div>
+                                    <h3 class="font-bold text-xs text-[#1A1C1E]">通用设置</h3>
+                                </div>
+                                    <div class="p-2.5 space-y-2">
+                                    <!-- yt-dlp status -->
+                                    <div
+                                        class="flex items-center justify-between gap-3 p-2.5 bg-white rounded-lg border border-slate-100">
+                                        <div class="flex items-center gap-2.5">
+                                            <div
+                                                class="w-8 h-8 rounded-md bg-gradient-to-br from-slate-100 to-slate-50 border border-slate-200 flex items-center justify-center">
+                                                <span
+                                                    class="material-symbols-outlined text-[16px] text-primary">terminal</span>
+                                            </div>
+                                            <div>
+                                                <h4 class="font-bold text-[11px] text-[#1A1C1E]">yt-dlp 核心</h4>
+                                                <div class="flex items-center gap-2">
+                                                    <span id="ytdlp-version"
+                                                        class="text-[10px] text-slate-400">检测中...</span>
+                                                    <button onclick="handleUpdateCore()" id="btn-update-core"
+                                                        class="text-[10px] text-blue-500 hover:text-blue-700 font-bold cursor-pointer">检查更新</button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <span
+                                            class="px-2 py-1 bg-green-100 text-green-600 text-[9px] font-bold rounded">就绪</span>
+                                    </div>
+
+                                    <div
+                                        class="flex items-center justify-between gap-3 p-2.5 bg-white rounded-lg border border-slate-100">
+                                        <div class="flex items-center gap-2.5 min-w-0">
+                                            <div
+                                                class="w-8 h-8 rounded-md bg-slate-50 border border-slate-200 flex items-center justify-center">
+                                                <span class="material-symbols-outlined text-[16px] text-slate-500">system_update</span>
+                                            </div>
+                                            <div class="min-w-0">
+                                                <h4 class="font-bold text-[11px] text-[#1A1C1E]">应用更新</h4>
+                                                <div class="flex items-center gap-2">
+                                                    <span id="app-version" class="text-[10px] text-slate-400">v2.0.0</span>
+                                                    <button onclick="handleCheckAppUpdate()" id="btn-check-app-update"
+                                                        class="text-[10px] text-blue-500 hover:text-blue-700 font-bold cursor-pointer">检查更新</button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <span id="app-update-status"
+                                            class="px-2 py-1 bg-slate-100 text-slate-500 text-[9px] font-bold rounded">未检查</span>
+                                    </div>
+
+                                    <!-- Output Directory Setting -->
+                                    <div class="flex items-center justify-between gap-3 p-2.5 bg-white rounded-lg border border-slate-100">
+                                        <div class="flex items-center gap-2.5 min-w-0">
+                                            <div
+                                                class="w-8 h-8 rounded-md bg-slate-50 border border-slate-200 flex items-center justify-center">
+                                                <span
+                                                    class="material-symbols-outlined text-[16px] text-slate-500">topic</span>
+                                            </div>
+                                            <div class="min-w-0">
+                                                <h4 class="font-bold text-[11px] text-[#1A1C1E]">下载位置</h4>
+                                                <div id="output-path"
+                                                    class="text-[10px] text-slate-400 truncate max-w-[120px]"
+                                                    title="点击更改">
+                                                    C:/Users/Downloads
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="flex gap-2">
+                                            <button id="open-folder-btn"
+                                                class="p-1.5 text-slate-400 hover:text-primary transition-colors"
+                                                title="打开文件夹">
+                                                <span class="material-symbols-outlined text-[18px]">folder_open</span>
+                                            </button>
+                                            <button id="change-folder-btn"
+                                                class="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-600 text-[10px] font-bold rounded-md transition-all">
+                                                更改
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                </div>
+                            </section>
+                        </div>
+                    </div>
+
+                    <!-- Downloading Tasks -->
+                    <div id="view-active-tasks" class="view-section">
+                        <section>
+                            <div class="flex items-center justify-between mb-5">
+                                <h3 class="text-lg font-bold text-[#1A1C1E] flex items-center gap-3">
+                                    下载任务
+                                    <span id="task-count"
+                                        class="bg-blue-100 text-primary text-xs px-2.5 py-1 rounded-full font-bold">0</span>
+                                </h3>
+                                <div class="flex items-center gap-3">
+                                    <div id="tasks-plugin-status"
+                                        class="hidden items-center gap-2 px-3 py-1.5 rounded-full bg-slate-50 border border-slate-100 text-[11px] text-slate-500">
+                                        <span id="tasks-plugin-status-dot" class="w-2 h-2 rounded-full bg-slate-300 shrink-0"></span>
+                                        <span id="tasks-plugin-status-text">插件未连接</span>
+                                    </div>
+                                    <button id="tasks-open-folder-btn"
+                                        class="text-slate-400 hover:text-primary text-xs font-bold transition-colors px-2 py-1.5 rounded-md hover:bg-slate-50 flex items-center gap-1"
+                                        title="打开下载文件夹">
+                                        <span class="material-symbols-outlined text-[14px]">folder_open</span>
+                                        打开文件夹
+                                    </button>
+                                    <button id="tasks-change-folder-btn"
+                                        class="text-slate-400 hover:text-primary text-xs font-bold transition-colors px-2 py-1.5 rounded-md hover:bg-slate-50 flex items-center gap-1"
+                                        title="设置下载文件夹">
+                                        <span class="material-symbols-outlined text-[14px]">edit</span>
+                                        设置下载目录
+                                    </button>
+                                </div>
+                            </div>
+                            <div id="tasks-container" class="flex flex-col gap-4">
+                                <!-- Empty state handled by JS -->
+                            </div>
+                        </section>
+                    </div>
+
+                    <!-- Completed Tasks -->
+                    <div id="view-completed-tasks" class="view-section hidden">
+                        <section>
+                            <div class="flex items-center justify-between mb-5">
+                                <h3 class="text-lg font-bold text-[#1A1C1E] flex items-center gap-3">已完成</h3>
+                                <div class="flex items-center gap-2">
+                                    <button onclick="handleClearHistory(true)"
+                                        class="text-slate-400 hover:text-red-500 text-xs font-bold transition-colors px-2 py-1.5 rounded-md hover:bg-red-50 flex items-center gap-1"
+                                        title="清空记录并删除文件">
+                                        <span class="material-symbols-outlined text-[14px]">delete</span>
+                                        清空并删除文件
+                                    </button>
+                                    <button onclick="handleClearHistory(false)"
+                                        class="text-slate-400 hover:text-red-500 text-xs font-bold transition-colors px-2 py-1.5 rounded-md hover:bg-red-50"
+                                        title="仅清空记录">
+                                        仅清空记录
+                                    </button>
+                                </div>
+                            </div>
+                            <div id="completed-tasks-container" class="flex flex-col gap-4"></div>
+                        </section>
+                    </div>
+
+                    <!-- Logs View -->
+                    <div id="view-logs" class="view-section hidden">
+                        <section class="bg-[#1e1e1e] rounded-[20px] p-4 font-mono text-xs h-[500px] flex flex-col">
+                            <div class="flex items-center justify-between border-b border-gray-700 pb-2 mb-2">
+                                <span class="text-gray-400">系统日志</span>
+                                <button onclick="document.getElementById('logs-container').innerHTML=''"
+                                    class="text-gray-500 hover:text-gray-300">清除</button>
+                            </div>
+                            <div id="logs-container" class="flex-1 overflow-y-auto space-y-1 text-gray-300 select-text">
+                                <!-- Logs will be injected here -->
+                            </div>
+                        </section>
+                    </div>
+
+                    <!-- Help View -->
+                    <div id="view-help" class="view-section hidden">
+                        <section class="max-w-2xl mx-auto">
+                            <h2 class="text-2xl font-bold text-[#1A1C1E] mb-6 flex items-center gap-3">
+                                <span class="material-symbols-outlined text-primary"
+                                    style="font-variation-settings: 'FILL' 1;">help</span>
+                                使用说明
+                            </h2>
+
+                            <div class="space-y-6">
+                                <!-- Step 1 -->
+                                <div
+                                    class="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-2xl p-5 border border-blue-100">
+                                    <div class="flex items-start gap-4">
+                                        <div
+                                            class="w-10 h-10 bg-primary text-white rounded-full flex items-center justify-center font-bold shrink-0">
+                                            1</div>
+                                        <div>
+                                            <h3 class="font-bold text-[#1A1C1E] mb-2">连接浏览器插件</h3>
+                                            <p class="text-slate-600 text-sm leading-relaxed mb-3">
+                                                如果需要下载会员视频、登录后可见视频，先到【通用设置】里完成插件配对。
+                                            </p>
+                                            <div class="bg-white/60 rounded-lg p-3 space-y-2 text-sm text-slate-600">
+                                                <div class="flex items-start gap-2">
+                                                    <span class="text-green-500 font-bold">步骤一：</span>
+                                                    <span>点击“打开插件目录”，在 Chrome / Edge 扩展管理页开启开发者模式并加载已解压扩展。</span>
+                                                </div>
+                                                <div class="flex items-start gap-2">
+                                                    <span class="text-blue-500 font-bold">步骤二：</span>
+                                                    <span>把软件里的配对码填到插件中，完成连接后插件会自动同步 Cookie。</span>
+                                                </div>
+                                                <div class="flex items-start gap-2">
+                                                    <span class="text-amber-500 font-bold">说明：</span>
+                                                    <span>插件连接一次后会自动同步，平时无需再手动导出 Cookie 文件。</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Step 2 -->
+                                <div
+                                    class="bg-gradient-to-r from-green-50 to-emerald-50 rounded-2xl p-5 border border-green-100">
+                                    <div class="flex items-start gap-4">
+                                        <div
+                                            class="w-10 h-10 bg-green-500 text-white rounded-full flex items-center justify-center font-bold shrink-0">
+                                            2</div>
+                                        <div>
+                                            <h3 class="font-bold text-[#1A1C1E] mb-2">粘贴视频链接</h3>
+                                            <p class="text-slate-600 text-sm leading-relaxed">
+                                                复制任意支持站点的视频链接（如 YouTube、Vimeo、Bilibili、Pinterest 等），
+                                                粘贴到顶部输入框中，点击"立即下载"开始解析。
+                                            </p>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Step 3 -->
+                                <div
+                                    class="bg-gradient-to-r from-amber-50 to-orange-50 rounded-2xl p-5 border border-amber-100">
+                                    <div class="flex items-start gap-4">
+                                        <div
+                                            class="w-10 h-10 bg-amber-500 text-white rounded-full flex items-center justify-center font-bold shrink-0">
+                                            3</div>
+                                        <div>
+                                            <h3 class="font-bold text-[#1A1C1E] mb-2">选择画质并下载</h3>
+                                            <p class="text-slate-600 text-sm leading-relaxed">
+                                                解析完成后，从下拉菜单中选择所需画质（如 1080p、4K 等），
+                                                点击"开始下载"。如果中途取消，任务会保留在列表里，你可以直接重新选择其他清晰度继续下载。下载完成后可点击缩略图打开文件夹。
+                                            </p>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Tips -->
+                                <div class="bg-slate-50 rounded-2xl p-5 border border-slate-200">
+                                    <h3 class="font-bold text-[#1A1C1E] mb-3 flex items-center gap-2">
+                                        <span class="material-symbols-outlined text-slate-500">tips_and_updates</span>
+                                        小贴士
+                                    </h3>
+                                    <ul class="text-slate-600 text-sm space-y-2">
+                                        <li class="flex items-start gap-2">
+                                            <span class="text-primary">•</span>
+                                            <span>支持 1000+ 视频站点，包括 YouTube、Vimeo、Bilibili、Twitter、TikTok、Behance
+                                                等</span>
+                                        </li>
+                                        <li class="flex items-start gap-2">
+                                            <span class="text-primary">•</span>
+                                            <span>下载路径可在【通用设置】中修改，首页任务区也可快速打开文件夹或设置目录</span>
+                                        </li>
+                                        <li class="flex items-start gap-2">
+                                            <span class="text-primary">•</span>
+                                            <span>遇到问题可查看【系统日志】获取详细错误信息</span>
+                                        </li>
+                                        <li class="flex items-start gap-2">
+                                            <span class="text-primary">•</span>
+                                            <span>插件状态、同步数量和最近同步时间会实时显示，便于确认会员 Cookie 是否已生效</span>
+                                        </li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </section>
+                    </div>
+
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        // ==================== 全局状态 ====================
+        let tasks = {};
+        let currentView = 'all-tasks';
+        let behanceExpandedState = {}; // 保存每个任务的 Behance 列表展开状态
+        let cookieSyncStatus = null;
+        const APP_VERSION = '1.0.0';
+
+        // ==================== Electron API ====================
+        // window.api 由 preload.js 暴露
+        async function callApi(methodName, ...args) {
+            if (!window.api) {
+                console.error('[API] window.api 不存在');
+                showToast('API 未就绪', 'error');
+                return null;
+            }
+
+            try {
+                // 将 snake_case 转换为 camelCase
+                const camelMethod = methodName.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+                const method = window.api[camelMethod];
+
+                if (typeof method !== 'function') {
+                    console.error('[API] 方法不存在:', camelMethod);
+                    return null;
+                }
+
+                const result = await method(...args);
+                console.log('[API] 调用成功:', camelMethod, result);
+                return result;
+            } catch (e) {
+                console.error('[API] 调用失败:', methodName, e);
+                showToast('操作失败: ' + e.message, 'error');
+                return null;
+            }
+        }
+
+        // ==================== 初始化 ====================
+        document.addEventListener('DOMContentLoaded', async () => {
+            console.log('[UI] DOM 加载完成');
+
+            // 绑定事件
+            setupEventListeners();
+
+            // 监听任务更新
+            if (window.api && window.api.onTaskUpdate) {
+                window.api.onTaskUpdate((task) => {
+                    if (task.status === 'cancelled') {
+                        delete tasks[task.task_id];
+                    } else {
+                        tasks[task.task_id] = task;
+                    }
+                    renderTasks(Object.values(tasks));
+                });
+            }
+
+            if (window.api && window.api.onCookieSyncUpdate) {
+                window.api.onCookieSyncUpdate(async (status) => {
+                    cookieSyncStatus = status;
+                    updateCookieSyncUI(status);
+                    const config = await callApi('getConfig');
+                    if (config) updateCookieUI(config);
+                });
+            }
+
+            // 加载初始数据
+            await initData();
+
+            switchView(currentView);
+
+            showToast('已连接', 'success');
+        });
+
+        function appendLog(log) {
+            const container = document.getElementById('logs-container');
+            if (container) {
+                const div = document.createElement('div');
+                div.className = log.type === 'ERROR' ? 'text-red-400' : 'text-gray-300';
+                div.textContent = `[${log.time}] [${log.type}] ${log.message}`;
+                container.appendChild(div);
+                container.scrollTop = container.scrollHeight;
+            }
+        }
+
+        async function initData() {
+            console.log('[UI] 初始化数据...');
+
+            // 初始化日志监听
+            if (window.api && window.api.onLogUpdate) {
+                window.api.onLogUpdate((log) => appendLog(log));
+            }
+            // 加载历史日志
+            const logs = await callApi('getLogs');
+            if (Array.isArray(logs)) {
+                // logs is [newest, ..., oldest], reverse to show oldest first
+                [...logs].reverse().forEach(log => appendLog(log));
+            }
+
+            // yt-dlp 版本 (如果还在检测中，2秒后重试一次)
+            let version = await callApi('getYtdlpVersion');
+            console.log('[UI] yt-dlp version (initial):', version);
+            const verEl = document.getElementById('ytdlp-version');
+            if (verEl) verEl.textContent = version || '未知';
+
+            if (version === '检测中...') {
+                setTimeout(async () => {
+                    version = await callApi('getYtdlpVersion');
+                    console.log('[UI] yt-dlp version (retry):', version);
+                    if (verEl && version) verEl.textContent = version;
+                }, 2000);
+            }
+
+            // 加载配置
+            const config = await callApi('getConfig');
+            if (config) {
+                // UI Init
+                if (config.output_dir) {
+                    const el = document.getElementById('output-path');
+                    if (el) {
+                        el.textContent = config.output_dir;
+                        el.title = config.output_dir;
+                    }
+                }
+                updateCookieUI(config);
+            }
+
+            const syncStatus = await callApi('getCookieSyncStatus');
+            if (syncStatus) {
+                cookieSyncStatus = syncStatus;
+                updateCookieSyncUI(syncStatus);
+            }
+
+            const appVersionEl = document.getElementById('app-version');
+            if (appVersionEl) appVersionEl.textContent = `v${APP_VERSION}`;
+
+            // 加载任务
+            const activeTasks = await callApi('getTasks');
+            if (activeTasks && Array.isArray(activeTasks)) {
+                activeTasks.forEach(task => {
+                    tasks[task.task_id] = task;
+                });
+                renderTasks(Object.values(tasks));
+                console.log('[UI] 已加载任务:', activeTasks.length);
+            }
+
+            // 加载历史记录 (最近5条) 到主视图
+            const completedHistory = await callApi('getCompletedTasks');
+            if (completedHistory && Array.isArray(completedHistory)) {
+                // 添加到 tasks 字典
+                completedHistory.forEach(task => {
+                    // 确保状态正确
+                    if (task.status !== 'completed' && task.status !== 'failed') {
+                        task.status = 'completed';
+                    }
+                    if (!tasks[task.task_id]) {
+                        tasks[task.task_id] = task;
+                    }
+                });
+                // 重新渲染 (active + 5 history)
+                renderTasks(Object.values(tasks));
+            }
+        }
+
+        function setupEventListeners() {
+            const urlInput = document.getElementById('url-input');
+            const pasteBtn = document.getElementById('paste-btn');
+            const downloadBtn = document.getElementById('download-btn');
+
+            if (pasteBtn) pasteBtn.addEventListener('click', handlePaste);
+            if (downloadBtn) downloadBtn.addEventListener('click', handleStartDownload);
+            if (urlInput) {
+                urlInput.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') handleStartDownload();
+                });
+            }
+
+            const openFolderBtn = document.getElementById('open-folder-btn');
+            if (openFolderBtn) openFolderBtn.addEventListener('click', () => callApi('openFolder'));
+
+            const changeFolderBtn = document.getElementById('change-folder-btn');
+            if (changeFolderBtn) changeFolderBtn.addEventListener('click', handleChangeFolder);
+
+            const tasksOpenFolderBtn = document.getElementById('tasks-open-folder-btn');
+            if (tasksOpenFolderBtn) tasksOpenFolderBtn.addEventListener('click', () => callApi('openFolder'));
+
+            const tasksChangeFolderBtn = document.getElementById('tasks-change-folder-btn');
+            if (tasksChangeFolderBtn) tasksChangeFolderBtn.addEventListener('click', handleChangeFolder);
+
+            const clearHistoryBtn = document.getElementById('clear-history-btn');
+            if (clearHistoryBtn) clearHistoryBtn.addEventListener('click', handleClearHistory);
+
+            // 导航
+            const navItems = [
+                { id: 'nav-all-tasks', view: 'all-tasks' },
+                { id: 'nav-completed', view: 'completed' },
+                { id: 'nav-help', view: 'help' },
+                { id: 'nav-settings', view: 'settings' },
+                { id: 'nav-logs', view: 'logs' }
+            ];
+
+            navItems.forEach(item => {
+                const el = document.getElementById(item.id);
+                if (el) {
+                    el.addEventListener('click', (e) => {
+                        e.preventDefault();
+                        switchView(item.view);
+                    });
+                }
+            });
+        }
+
+        // ==================== 事件处理 ====================
+        async function handlePaste() {
+            const urlInput = document.getElementById('url-input');
+            const result = await callApi('pasteFromClipboard');
+            if (result && result.success && urlInput) {
+                urlInput.value = result.text;
+                urlInput.focus();
+                showToast('已粘贴', 'success');
+            }
+        }
+
+        let isSubmitting = false; // 防止重复提交
+        async function handleStartDownload() {
+            if (isSubmitting) return;
+
+            const urlInput = document.getElementById('url-input');
+            if (!urlInput) return;
+
+            const url = urlInput.value.trim();
+            if (!url) {
+                showToast('请输入视频链接', 'warning');
+                return;
+            }
+
+            isSubmitting = true;
+            const downloadBtn = document.getElementById('download-btn');
+            if (downloadBtn) {
+                downloadBtn.disabled = true;
+                downloadBtn.textContent = '解析中...';
+            }
+
+            try {
+                const result = await callApi('startDownload', url);
+                if (result && result.success) {
+                    urlInput.value = '';
+                    switchView('all-tasks');
+                    showToast('正在解析视频...', 'info');
+                } else if (result) {
+                    showToast(result.error || '启动失败', 'error');
+                }
+            } finally {
+                isSubmitting = false;
+                if (downloadBtn) {
+                    downloadBtn.disabled = false;
+                    downloadBtn.textContent = '立即下载';
+                }
+            }
+        }
+
+        async function handleSelectFormat(taskId, formatId) {
+            const result = await callApi('selectFormatAndDownload', taskId, formatId);
+            if (result && !result.success) {
+                showToast(result.error || '开始下载失败', 'error');
+            }
+        }
+
+        async function handleCancelTask(taskId) {
+            const result = await callApi('cancelTask', taskId);
+            if (tasks[taskId] && result && result.success) {
+                tasks[taskId].status = 'cancelled';
+                tasks[taskId].error_message = '正在取消下载...';
+                renderTasks(Object.values(tasks));
+            }
+
+            if (result && result.success) {
+                showToast('正在取消下载...', 'success');
+            } else {
+                showToast(result?.error || '取消失败', 'error');
+            }
+        }
+
+        async function handleDeleteTask(taskId) {
+            const result = await callApi('deleteCompletedTask', taskId);
+            if (result && result.success) {
+                delete tasks[taskId];
+                renderTasks(Object.values(tasks));
+                showToast('已删除', 'success');
+            } else {
+                showToast('删除失败', 'error');
+            }
+        }
+
+        function showConfirmModal(title, message, onConfirm) {
+            const modal = document.getElementById('confirm-modal');
+            const modalTitle = document.getElementById('confirm-modal-title');
+            const modalMessage = document.getElementById('confirm-modal-message');
+            const confirmBtn = document.getElementById('confirm-modal-confirm');
+            const cancelBtn = document.getElementById('confirm-modal-cancel');
+
+            modalTitle.textContent = title;
+            modalMessage.textContent = message;
+            modal.classList.remove('hidden');
+
+            const handleConfirm = () => {
+                modal.classList.add('hidden');
+                confirmBtn.removeEventListener('click', handleConfirm);
+                cancelBtn.removeEventListener('click', handleCancel);
+                onConfirm();
+            };
+            const handleCancel = () => {
+                modal.classList.add('hidden');
+                confirmBtn.removeEventListener('click', handleConfirm);
+                cancelBtn.removeEventListener('click', handleCancel);
+            };
+
+            confirmBtn.addEventListener('click', handleConfirm);
+            cancelBtn.addEventListener('click', handleCancel);
+        }
+
+        async function handleClearHistory() {
+            showConfirmModal('确认清空', '确定要清空所有下载记录吗？此操作不可撤销。', async () => {
+                await callApi('clearCompletedTasks');
+                // Remove completed tasks from local dict
+                Object.keys(tasks).forEach(id => {
+                    if (tasks[id].status === 'completed') delete tasks[id];
+                });
+                renderTasks(Object.values(tasks));
+                showToast('已清空', 'success');
+            });
+        }
+
+        async function handleChangeFolder() {
+            const result = await callApi('chooseDirectory');
+            if (result && result.success && result.path) {
+                const pathEl = document.getElementById('output-path');
+                if (pathEl) {
+                    pathEl.textContent = result.path;
+                    pathEl.title = result.path;
+                }
+                showToast('下载目录已更新', 'success');
+            }
+        }
+
+        function formatDateTime(value) {
+            if (!value) return '尚未同步';
+            const date = new Date(value);
+            if (Number.isNaN(date.getTime())) return '尚未同步';
+            return date.toLocaleString();
+        }
+
+        function updateCookieSyncUI(status) {
+            if (!status) return;
+
+            const card = document.getElementById('cookie-sync-card');
+            const indicator = document.getElementById('indicator-plugin-sync');
+            const stateEl = document.getElementById('cookie-sync-state');
+            const browserEl = document.getElementById('cookie-sync-browser');
+            const countEl = document.getElementById('cookie-sync-count');
+            const lastSyncEl = document.getElementById('cookie-sync-last-sync');
+            const tokenEl = document.getElementById('cookie-sync-token');
+            const tokenLabelEl = document.getElementById('cookie-sync-token-label');
+            const pillEl = document.getElementById('cookie-sync-source-pill');
+            const activateBtn = document.getElementById('btn-activate-plugin-source');
+            const tasksPluginStatus = document.getElementById('tasks-plugin-status');
+            const tasksPluginStatusDot = document.getElementById('tasks-plugin-status-dot');
+            const tasksPluginStatusText = document.getElementById('tasks-plugin-status-text');
+
+            if (stateEl) {
+                stateEl.textContent = !status.running
+                    ? '服务未启动'
+                    : (status.paired ? '已配对' : '等待配对');
+            }
+            if (browserEl) browserEl.textContent = status.browser || '未连接';
+            if (countEl) countEl.textContent = `${status.lastCookieCount || 0} 个 Cookie`;
+            if (lastSyncEl) lastSyncEl.textContent = status.lastSyncAt
+                ? formatDateTime(status.lastSyncAt)
+                : '尚未同步';
+            if (tokenEl) tokenEl.textContent = status.token || '--------';
+            if (tokenLabelEl) tokenLabelEl.textContent = '配对码';
+
+            if (tasksPluginStatus && tasksPluginStatusText) {
+                tasksPluginStatus.classList.remove('hidden');
+                tasksPluginStatus.classList.add('inline-flex');
+
+                if (status.sourceActive) {
+                    tasksPluginStatus.className = 'inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-green-50 border border-green-100 text-[11px] text-green-700';
+                    if (tasksPluginStatusDot) tasksPluginStatusDot.className = 'w-2 h-2 rounded-full bg-green-500 shrink-0';
+                    tasksPluginStatusText.textContent = `已连接 · ${status.browser || '浏览器'} · ${status.lastSyncAt ? formatDateTime(status.lastSyncAt) : '已同步'}`;
+                } else if (status.paired) {
+                    tasksPluginStatus.className = 'inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-blue-50 border border-blue-100 text-[11px] text-blue-700';
+                    if (tasksPluginStatusDot) tasksPluginStatusDot.className = 'w-2 h-2 rounded-full bg-blue-500 shrink-0';
+                    tasksPluginStatusText.textContent = `已配对 · ${status.browser || '浏览器'}`;
+                } else {
+                    tasksPluginStatus.className = 'inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-50 border border-slate-100 text-[11px] text-slate-500';
+                    if (tasksPluginStatusDot) tasksPluginStatusDot.className = 'w-2 h-2 rounded-full bg-slate-300 shrink-0';
+                    tasksPluginStatusText.textContent = '未连接';
+                }
+            }
+
+            if (card) card.classList.remove('border-blue-400', 'bg-blue-50/40');
+            if (indicator) indicator.classList.add('hidden');
+            if (pillEl) {
+                pillEl.textContent = status.sourceActive ? '自动同步已开启' : (status.paired ? '已配对' : '未启用');
+                pillEl.className = status.sourceActive
+                    ? 'px-2 py-1 rounded-full text-[9px] font-bold bg-green-100 text-green-600'
+                    : (status.paired
+                        ? 'px-2 py-1 rounded-full text-[9px] font-bold bg-blue-100 text-blue-600'
+                        : 'px-2 py-1 rounded-full text-[9px] font-bold bg-slate-100 text-slate-500');
+            }
+
+            if (activateBtn) {
+                if (status.sourceActive) {
+                    activateBtn.textContent = '自动同步已开启';
+                    activateBtn.disabled = true;
+                    activateBtn.className = 'px-2 py-1 bg-green-100 text-green-600 text-[10px] font-bold rounded-lg transition-all cursor-default';
+                } else if (status.paired) {
+                    activateBtn.textContent = '设为当前来源';
+                    activateBtn.disabled = false;
+                    activateBtn.className = 'px-2 py-1 bg-blue-500 hover:bg-blue-600 text-white text-[10px] font-bold rounded-lg transition-all';
+                } else {
+                    activateBtn.textContent = '启用插件同步';
+                    activateBtn.disabled = false;
+                    activateBtn.className = 'px-2 py-1 bg-blue-500 hover:bg-blue-600 text-white text-[10px] font-bold rounded-lg transition-all';
+                }
+            }
+
+            if (status.sourceActive) {
+                if (card) card.classList.add('border-blue-400', 'bg-blue-50/40');
+                if (indicator) indicator.classList.remove('hidden');
+            }
+        }
+
+        async function handleOpenExtensionFolder() {
+            const result = await callApi('openExtensionFolder');
+            if (result && result.success) {
+                showToast('已打开插件目录', 'success');
+            } else {
+                showToast(result?.message || '打开插件目录失败', 'error');
+            }
+        }
+
+        async function handleCopyCookieSyncToken() {
+            const status = cookieSyncStatus || await callApi('getCookieSyncStatus');
+            if (!status?.token) {
+                showToast('暂无可复制的配对码', 'warning');
+                return;
+            }
+
+            try {
+                await navigator.clipboard.writeText(status.token);
+                showToast('配对码已复制', 'success');
+            } catch (error) {
+                showToast('复制失败，请手动复制', 'error');
+            }
+        }
+
+        async function handleResetCookieSyncToken() {
+            if (!confirm('重新生成配对码后，浏览器插件需要重新连接。是否继续？')) return;
+            const status = await callApi('resetCookieSyncToken');
+            if (status) {
+                cookieSyncStatus = status;
+                updateCookieSyncUI(status);
+                showToast('已重新生成配对码', 'success');
+            }
+        }
+
+        async function handleActivatePluginSource() {
+            const result = await callApi('activatePluginCookieSource');
+            if (result && result.success) {
+                const config = await callApi('getConfig');
+                if (config) updateCookieUI(config);
+                const status = await callApi('getCookieSyncStatus');
+                if (status) {
+                    cookieSyncStatus = status;
+                    updateCookieSyncUI(status);
+                }
+                showToast('已切换为插件同步来源', 'success');
+            } else {
+                showToast(result?.message || '切换插件同步来源失败', 'error');
+            }
+        }
+
+        async function handleCheckAppUpdate() {
+            const btn = document.getElementById('btn-check-app-update');
+            const statusEl = document.getElementById('app-update-status');
+
+            if (btn) btn.textContent = '检查中...';
+            if (statusEl) {
+                statusEl.textContent = '检查中';
+                statusEl.className = 'px-2 py-1 bg-slate-100 text-slate-500 text-[9px] font-bold rounded';
+            }
+
+            const result = await callApi('checkAppUpdate');
+
+            if (btn) btn.textContent = '检查更新';
+
+            if (!result || !result.success) {
+                if (statusEl) {
+                    statusEl.textContent = '检查失败';
+                    statusEl.className = 'px-2 py-1 bg-red-100 text-red-600 text-[9px] font-bold rounded';
+                }
+                showToast(result?.message || '检查更新失败', 'error');
+                return;
+            }
+
+            if (result.hasUpdate) {
+                if (statusEl) {
+                    statusEl.textContent = `可更新 v${result.latestVersion}`;
+                    statusEl.className = 'px-2 py-1 bg-amber-100 text-amber-700 text-[9px] font-bold rounded';
+                }
+                const confirmed = confirm(`发现新版本 v${result.latestVersion}，是否打开发布页下载？`);
+                if (confirmed) {
+                    await callApi('openExternal', result.downloadUrl || result.releaseUrl);
+                }
+            } else {
+                if (statusEl) {
+                    statusEl.textContent = '已是最新';
+                    statusEl.className = 'px-2 py-1 bg-green-100 text-green-600 text-[9px] font-bold rounded';
+                }
+                showToast('当前已经是最新版本', 'success');
+            }
+        }
+
+        async function openRepository() {
+            await callApi('openExternal', 'https://github.com/Danborad/YTdown');
+        }
+        // 删除单个已完成任务
+        async function handleDeleteTask(taskId, deleteFiles = false) {
+            const confirmMsg = deleteFiles ? '确定删除记录并删除下载的文件吗？' : '确定删除此记录吗？';
+            if (!confirm(confirmMsg)) return;
+
+            const result = await callApi('deleteCompletedTask', taskId, deleteFiles);
+            if (result && result.success) {
+                delete tasks[taskId];
+                renderTasks(Object.values(tasks));
+                showToast(deleteFiles ? '已删除记录和文件' : '已删除记录', 'success');
+            }
+        }
+
+        async function handleReparseCompletedTask(taskId) {
+            const task = tasks[taskId];
+            if (!task || !task.url) {
+                showToast('找不到原始任务链接', 'error');
+                return;
+            }
+
+            const result = await callApi('startDownload', task.url);
+            if (result && result.success) {
+                showToast('已重新解析，可重新选择画质下载', 'success');
+                switchView('all-tasks');
+            } else {
+                showToast(result?.error || '重新解析失败', 'error');
+            }
+        }
+
+        // 清空已完成任务
+        async function handleClearHistory(deleteFiles = false) {
+            const confirmMsg = deleteFiles ? '确定清空所有记录并删除所有下载的文件吗？此操作不可恢复！' : '确定清空所有记录吗？';
+            if (!confirm(confirmMsg)) return;
+
+            const result = await callApi('clearCompletedTasks', deleteFiles);
+            if (result && result.success) {
+                Object.keys(tasks).forEach(id => {
+                    if (['completed', 'failed', 'cancelled'].includes(tasks[id].status)) {
+                        delete tasks[id];
+                    }
+                });
+                renderTasks(Object.values(tasks));
+                showToast(deleteFiles ? '已清空记录并删除文件' : '已清空记录', 'success');
+            }
+        }
+
+        function updateCookieUI(config) {
+            updateCookieSyncUI({
+                ...(cookieSyncStatus || {}),
+                sourceActive: config.cookie_source === 'plugin-sync',
+                token: cookieSyncStatus?.token || '--------',
+                browser: cookieSyncStatus?.browser || ''
+            });
+        }
+
+        // ==================== 视图切换 ====================
+        function switchView(viewName) {
+            currentView = viewName;
+            document.getElementById('view-input').classList.add('hidden');
+            document.querySelectorAll('.view-section').forEach(el => el.classList.add('hidden'));
+            document.querySelectorAll('.sidebar-item').forEach(el => {
+                el.classList.remove('active', 'bg-white', 'shadow-sm', 'text-primary');
+                el.classList.add('text-slate-500');
+            });
+
+            const activeLink = document.getElementById(`nav-${viewName}`);
+            if (activeLink) {
+                activeLink.classList.add('active', 'bg-white', 'shadow-sm', 'text-primary');
+                activeLink.classList.remove('text-slate-500');
+            }
+
+            if (viewName === 'all-tasks') {
+                document.getElementById('view-input').classList.remove('hidden');
+                document.getElementById('view-active-tasks').classList.remove('hidden');
+            } else if (viewName === 'completed') {
+                document.getElementById('view-completed-tasks').classList.remove('hidden');
+                loadCompletedTasks();
+            } else if (viewName === 'settings') {
+                document.getElementById('view-input').classList.remove('hidden');
+                document.getElementById('view-settings').classList.remove('hidden');
+            } else if (viewName === 'logs') {
+                document.getElementById('view-logs').classList.remove('hidden');
+            } else if (viewName === 'help') {
+                document.getElementById('view-help').classList.remove('hidden');
+            }
+        }
+
+        async function loadCompletedTasks() {
+            const completed = await callApi('getCompletedTasks');
+            const container = document.getElementById('completed-tasks-container');
+            if (completed && container) {
+                Object.keys(tasks).forEach(id => {
+                    if (['completed', 'failed', 'cancelled'].includes(tasks[id].status)) {
+                        delete tasks[id];
+                    }
+                });
+                completed.forEach(task => {
+                    tasks[task.task_id] = task;
+                });
+
+                // 按时间倒序
+                completed.sort((a, b) => getTaskSortTime(b) - getTaskSortTime(a));
+                renderTasksToContainer(container, completed, 'completed');
+                renderTasks(Object.values(tasks));
+            }
+        }
+
+
+
+        // ==================== 渲染函数 ====================
+        // ==================== 渲染函数 ====================
+        function renderTasks(taskList) {
+            // 按 ID (时间) 倒序
+            taskList.sort((a, b) => getTaskSortTime(b) - getTaskSortTime(a));
+
+            const completedStates = ['completed', 'failed', 'cancelled'];
+            const active = taskList.filter(t => !completedStates.includes(t.status));
+            const completed = taskList.filter(t => completedStates.includes(t.status));
+
+            // 更新计数
+            const countEl = document.getElementById('task-count');
+            if (countEl) countEl.textContent = active.length;
+
+            // 1. 主视图: 活跃 + 最近5个已完成
+            const mainContainer = document.getElementById('tasks-container');
+
+            // Update Completed Count
+            const completedCountEl = document.getElementById('completed-count');
+            if (completedCountEl) completedCountEl.innerText = completed.length || 0;
+
+            const mainList = [...active, ...completed.slice(0, 5)];
+            renderTasksToContainer(mainContainer, mainList, 'active');
+
+            // 2. 已完成视图: 所有已完成
+            const compContainer = document.getElementById('completed-tasks-container');
+            renderTasksToContainer(compContainer, completed, 'completed');
+        }
+
+        function getTaskSortTime(task) {
+            if (!task) return 0;
+            if (typeof task.finishTime === 'number') return task.finishTime;
+
+            const parsedFinishTime = Date.parse(task.finishTime || '');
+            if (!Number.isNaN(parsedFinishTime)) return parsedFinishTime;
+
+            const taskIdPrefix = (task.task_id || '').split(/[a-z]/i)[0];
+            const base36Time = parseInt((task.task_id || '').slice(0, 8), 36);
+            if (!Number.isNaN(base36Time)) return base36Time;
+
+            const numericPrefix = parseInt(taskIdPrefix, 10);
+            return Number.isNaN(numericPrefix) ? 0 : numericPrefix;
+        }
+
+        function renderTasksToContainer(container, taskList, type) {
+            if (!container) return;
+
+            // ID 前缀区分
+            const prefix = type === 'active' ? 'task-' : 'hist-task-';
+
+            if (!taskList || taskList.length === 0) {
+                if (type === 'active') {
+                    container.innerHTML = `
+                        <div class="flex flex-col items-center justify-center py-12 text-center">
+                            <span class="material-symbols-outlined text-[48px] text-slate-200 mb-4">cloud_download</span>
+                            <p class="text-slate-400 text-sm">暂无下载任务</p>
+                            <p class="text-slate-300 text-xs mt-1">粘贴视频链接开始下载</p>
+                        </div>`;
+                } else {
+                    container.innerHTML = `
+                        <div class="flex flex-col items-center justify-center py-12 text-center">
+                            <span class="material-symbols-outlined text-[48px] text-slate-200 mb-4">check_circle</span>
+                            <p class="text-slate-400 text-sm">暂无已完成任务</p>
+                        </div>`;
+                }
+                return;
+            }
+
+            // 彻底简化：清空后重建所有元素
+            container.innerHTML = '';
+
+            taskList.forEach(task => {
+                const tempDiv = document.createElement('div');
+                tempDiv.innerHTML = renderTaskCard(task, type === 'completed');
+                const el = tempDiv.firstElementChild;
+                container.appendChild(el);
+                bindTaskEvents(el, task.task_id);
+            });
+        }
+
+        function bindTaskEvents(element, taskId) {
+            const cancelBtn = element.querySelector('[data-cancel]');
+            if (cancelBtn) cancelBtn.addEventListener('click', () => handleCancelTask(taskId));
+
+            const retryBtn = element.querySelector('[data-retry]');
+            if (retryBtn) retryBtn.addEventListener('click', () => handleRetryTask(taskId));
+
+            const formatSelect = element.querySelector('[data-format-select]');
+            const downloadBtn = element.querySelector('[data-start-download]');
+
+            if (downloadBtn && formatSelect) {
+                downloadBtn.addEventListener('click', () => {
+                    if (formatSelect.value) handleSelectFormat(taskId, formatSelect.value);
+                });
+            }
+
+            // Behance 多视频事件
+            const behanceToggle = element.querySelector('[data-behance-toggle]');
+            const behanceList = element.querySelector('[data-behance-list]');
+            if (behanceToggle && behanceList) {
+                behanceToggle.addEventListener('click', () => {
+                    behanceList.classList.toggle('hidden');
+                    const isNowHidden = behanceList.classList.contains('hidden');
+                    // 保存展开状态到全局对象
+                    behanceExpandedState[taskId] = !isNowHidden;
+                    const icon = behanceToggle.querySelector('.behance-expand-icon');
+                    if (icon) {
+                        icon.textContent = isNowHidden ? 'expand_more' : 'expand_less';
+                    }
+                });
+            }
+
+            // Behance 复选框
+            element.querySelectorAll('[data-behance-check]').forEach(checkbox => {
+                checkbox.addEventListener('change', async (e) => {
+                    const entryId = parseInt(e.target.dataset.entryId);
+                    await callApi('updateBehanceSelection', taskId, entryId, e.target.checked);
+                });
+            });
+
+            // Behance 格式选择
+            element.querySelectorAll('[data-behance-format]').forEach(select => {
+                select.addEventListener('change', async (e) => {
+                    const entryId = parseInt(e.target.dataset.entryId);
+                    await callApi('updateBehanceFormat', taskId, entryId, e.target.value);
+                });
+            });
+
+            // Behance 下载按钮
+            const behanceDownloadBtn = element.querySelector('[data-behance-download]');
+            if (behanceDownloadBtn) {
+                behanceDownloadBtn.addEventListener('click', async () => {
+                    const result = await callApi('downloadBehanceVideos', taskId);
+                    if (result && !result.success) {
+                        showToast(result.error || '下载失败', 'error');
+                    }
+                });
+            }
+
+            const openUrlEl = element.querySelector('[data-open-url]');
+            if (openUrlEl) {
+                openUrlEl.addEventListener('click', async () => {
+                    const url = openUrlEl.dataset.openUrl;
+                    if (url) await callApi('openExternal', url);
+                });
+            }
+        }
+
+        function escapeHtml(value) {
+            return String(value ?? '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        async function handleRetryTask(taskId) {
+            showToast('正在重新解析...', 'info');
+            await callApi('retryTask', taskId);
+        }
+
+        function updateTaskElement(el, task) {
+            const progress = Math.round(task.progress || 0);
+            const statusTextEl = el.querySelector('.status-text');
+            const statusIconEl = el.querySelector('.status-icon'); // Assuming you add this span
+
+            if (task.status === 'downloading') {
+                if (statusTextEl) statusTextEl.className = 'text-xs text-blue-600 animate-pulse font-medium status-text';
+                if (statusIconEl) statusIconEl.innerHTML = `
+                    <svg class="animate-spin h-3 w-3 mr-1" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    下载中...
+                `;
+
+                // Update speed/ETA if available
+                const speedSpan = el.querySelector('.task-speed');
+                const etaSpan = el.querySelector('.task-eta');
+                if (speedSpan && task.speed) speedSpan.innerText = task.speed;
+                if (etaSpan && task.eta) etaSpan.innerText = task.eta ? `剩余 ${task.eta}` : '';
+
+            } else if (task.status === 'completed') {
+                if (statusTextEl) statusTextEl.className = 'text-xs text-green-600 font-medium status-text';
+                if (statusIconEl) statusIconEl.innerHTML = `
+                    <svg class="h-3 w-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                    </svg>
+                    已完成
+                `;
+            } else if (task.status === 'failed') {
+                if (statusTextEl) statusTextEl.className = 'text-xs text-red-600 font-medium status-text';
+                const friendlyError = getFriendlyErrorMessage(task.error_message || '未知错误');
+                if (statusIconEl) statusIconEl.innerHTML = `
+                    <svg class="h-3 w-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                    </svg>
+                    ${friendlyError}
+                `;
+                el.title = task.error_message || ''; // Add a tooltip for detailed error
+            } else {
+                if (statusTextEl) statusTextEl.className = 'text-xs text-gray-500 status-text';
+                if (statusIconEl) statusIconEl.innerHTML = getStatusText(task.status);
+            }
+
+            const progressEl = el.querySelector('.progress-bar-inner');
+            if (progressEl) progressEl.style.width = `${progress}%`;
+
+            const percentEl = el.querySelector('.progress-percent');
+            if (percentEl) percentEl.textContent = `${progress}%`;
+
+            if (el.dataset.status !== task.status) {
+                const tempDiv = document.createElement('div');
+                tempDiv.innerHTML = renderTaskCard(task);
+                const newEl = tempDiv.firstElementChild;
+                el.replaceWith(newEl);
+                bindTaskEvents(newEl, task.task_id);
+            }
+            el.dataset.status = task.status; // Update the data-status attribute
+        }
+
+        function renderTaskCard(task, isCompleted = false) {
+            const safeTitle = escapeHtml(task.title || '正在解析...');
+            const safeUrl = escapeHtml(task.url || '');
+            const statusText = getStatusText(task.status);
+            const progress = Math.round(task.progress || 0);
+            const isDownloading = task.status === 'downloading' || task.status === 'processing';
+            const isWaiting = task.status === 'waiting';
+
+            let formatSelector = '';
+
+            // Behance 多视频特殊处理
+            const isBehanceMulti = task.isBehance && task.entries && task.entries.length > 1;
+            if (isBehanceMulti && (isWaiting || isDownloading)) {
+                const entryCount = task.entries.length;
+                const selectedCount = task.entries.filter(e => e.selected).length;
+
+                // 下载时自动展开，否则使用全局状态
+                const isExpanded = isDownloading || behanceExpandedState[task.task_id] || false;
+                const hiddenClass = isExpanded ? '' : 'hidden';
+                const expandIcon = isExpanded ? 'expand_less' : 'expand_more';
+
+                const entriesHtml = task.entries.map((entry, index) => {
+                    if (isDownloading) {
+                        // 下载状态：显示进度
+                        const entryProgress = Math.round(entry.progress || 0);
+                        let statusIcon = '';
+                        let statusText = '';
+                        let infoText = '';
+                        let statusClass = 'text-slate-500';
+
+                        if (entry.status === 'downloading') {
+                            statusIcon = '<span class="material-symbols-outlined text-[18px] animate-spin text-primary">sync</span>';
+                            statusClass = 'text-primary';
+                            statusText = `${entryProgress}%`;
+                            // 显示速度和ETA
+                            const speedInfo = entry.speed || '';
+                            const etaInfo = entry.eta ? `剩余 ${entry.eta}` : '';
+                            infoText = [speedInfo, etaInfo].filter(Boolean).join(' • ');
+                        } else if (entry.status === 'completed') {
+                            statusIcon = '<span class="material-symbols-outlined text-[18px] text-green-500">check_circle</span>';
+                            statusClass = 'text-green-600';
+                            statusText = '完成';
+                            // 显示耗时和文件大小
+                            const durationInfo = entry.duration ? `耗时 ${entry.duration}` : '';
+                            const sizeInfo = entry.totalSize || '';
+                            infoText = [durationInfo, sizeInfo].filter(Boolean).join(' • ');
+                        } else if (entry.status === 'failed') {
+                            statusIcon = '<span class="material-symbols-outlined text-[18px] text-red-500">error</span>';
+                            statusClass = 'text-red-600';
+                            statusText = '失败';
+                        } else if (!entry.selected) {
+                            statusIcon = '<span class="material-symbols-outlined text-[18px] text-slate-300">remove_circle_outline</span>';
+                            statusText = '跳过';
+                        } else {
+                            statusIcon = '<span class="material-symbols-outlined text-[18px] text-slate-400">schedule</span>';
+                            statusText = '等待';
+                        }
+
+                        return `
+                        <div class="flex items-center gap-3 py-2 ${index > 0 ? 'border-t border-slate-100' : ''}">
+                            <div class="w-6 flex justify-center shrink-0">${statusIcon}</div>
+                            <div class="w-12 h-8 bg-slate-100 rounded overflow-hidden shrink-0">
+                                ${entry.thumbnail ? `<img src="${entry.thumbnail}" class="w-full h-full object-cover" onerror="this.src=''">` : ''}
+                            </div>
+                            <div class="flex-1 min-w-0">
+                                <div class="text-xs font-medium text-slate-700 truncate" title="${entry.title}">${entry.title}</div>
+                                ${entry.status === 'downloading' ? `
+                                    <div class="flex items-center gap-2 mt-1">
+                                        <div class="flex-1 bg-slate-200 rounded-full h-1 overflow-hidden">
+                                            <div class="bg-primary h-full rounded-full transition-all duration-300" style="width: ${entryProgress}%;"></div>
+                                        </div>
+                                        ${infoText ? `<span class="text-[10px] text-slate-400 shrink-0">${infoText}</span>` : ''}
+                                    </div>
+                                ` : (infoText ? `<div class="text-[10px] text-slate-400 mt-0.5">${infoText}</div>` : '')}
+                            </div>
+                            <div class="text-xs ${statusClass} font-medium min-w-[40px] text-right">${statusText}</div>
+                        </div>`;
+                    } else {
+                        // 等待状态：显示选择器
+                        const formatOptions = (entry.formats || []).map(f =>
+                            `<option value="${f.format_id}" ${entry.format_id === f.format_id ? 'selected' : ''}>${f.resolution || f.format_id}</option>`
+                        ).join('');
+
+                        return `
+                        <div class="flex items-center gap-3 py-2 ${index > 0 ? 'border-t border-slate-100' : ''}">
+                            <input type="checkbox" ${entry.selected ? 'checked' : ''} 
+                                data-behance-check="${task.task_id}" data-entry-id="${entry.id}"
+                                class="w-4 h-4 text-primary rounded border-slate-300 focus:ring-primary cursor-pointer">
+                            <div class="w-12 h-8 bg-slate-100 rounded overflow-hidden shrink-0">
+                                ${entry.thumbnail ? `<img src="${entry.thumbnail}" class="w-full h-full object-cover" onerror="this.src=''">` : ''}
+                            </div>
+                            <div class="flex-1 min-w-0">
+                                <div class="text-xs font-medium text-slate-700 truncate" title="${entry.title}">${entry.title}</div>
+                            </div>
+                            <select data-behance-format="${task.task_id}" data-entry-id="${entry.id}" 
+                                class="px-2 py-1.5 text-xs bg-slate-100 border border-slate-200 rounded text-slate-600 focus:outline-none min-w-[100px]">
+                                ${formatOptions}
+                            </select>
+                        </div>`;
+                    }
+                }).join('');
+
+                const actionButton = isDownloading
+                    ? `<div class="text-xs text-primary font-medium">下载中 ${(task.currentEntryIndex || 0) + 1}/${selectedCount}</div>`
+                    : `<button data-behance-download="${task.task_id}" class="px-4 py-2 bg-primary text-white text-xs font-bold rounded-lg hover:bg-primary-hover transition-colors">下载选中</button>`;
+
+                formatSelector = `
+                    <div class="mt-3">
+                        <div class="flex items-center justify-between mb-2">
+                            <button data-behance-toggle="${task.task_id}" class="flex items-center gap-1 text-xs text-slate-500 hover:text-primary transition-colors">
+                                <span class="material-symbols-outlined text-[16px] behance-expand-icon">${expandIcon}</span>
+                                <span>${entryCount} 个视频 (已选 ${selectedCount})</span>
+                            </button>
+                            ${actionButton}
+                        </div>
+                        <div data-behance-list="${task.task_id}" class="${hiddenClass} bg-slate-50 rounded-lg p-3 max-h-[250px] overflow-y-auto">
+                            ${entriesHtml}
+                        </div>
+                    </div>
+                `;
+            } else if (isWaiting && task.formats && task.formats.length > 0) {
+                // 普通单视频格式选择器
+                const options = task.formats.map(f =>
+                    `<option value="${f.format_id}">${f.resolution || f.format_id} (${f.ext})</option>`
+                ).join('');
+                formatSelector = `
+                    <div class="flex items-center gap-3 mt-3">
+                        <select data-format-select="${task.task_id}" class="flex-1 px-3 py-2 bg-slate-100 border border-slate-200 rounded-lg text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-primary">
+                            ${options}
+                        </select>
+                        <button data-start-download="${task.task_id}" class="px-4 py-2 bg-primary text-white text-sm font-bold rounded-lg hover:bg-primary-hover transition-colors">
+                            开始下载
+                        </button>
+                    </div>
+                `;
+            }
+
+            let progressBar = '';
+            // 如果是 Behance 多视频下载，不显示主进度条（已在上面显示详细进度）
+            if (isDownloading && !isCompleted && !isBehanceMulti) {
+                progressBar = `
+                    <div class="mt-4">
+                        <div class="flex justify-between text-xs font-medium mb-2">
+                            <span class="text-primary status-text flex items-center status-icon">${statusText}</span>
+                            <div class="flex items-center gap-2">
+                                <span class="text-slate-500 task-speed">${task.speed || ''}</span>
+                                <span class="text-slate-400 task-eta">${task.eta ? '剩余 ' + task.eta : ''}</span>
+                                <span class="text-slate-500 progress-percent">${progress}%</span>
+                            </div>
+                        </div>
+                        <div class="w-full bg-slate-200 rounded-full h-[6px] overflow-hidden">
+                            <div class="bg-primary h-full rounded-full relative overflow-hidden transition-all duration-300 progress-bar-inner" style="width: ${progress}%;">
+                                <div class="absolute inset-0 bg-white/30 animate-[shimmer_2s_infinite]"></div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            } else if (task.status === 'completed' && !isCompleted) { // For active view, show completed status
+                const dateStr = task.finishTime ? new Date(task.finishTime).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric' }) : '';
+                const parts = [dateStr, task.duration ? `耗时 ${task.duration}` : '', task.totalSize];
+                const infoStr = parts.filter(Boolean).join(' • ');
+                const formatInfo = task.format_summary ? `<div class="text-[11px] text-slate-500 font-medium mt-1">${escapeHtml(task.format_summary)}</div>` : '';
+
+                // Behance 已完成任务：展示每个视频
+                let behanceEntriesHtml = '';
+                if (task.isBehance && task.entries && task.entries.length > 0) {
+                    const entriesContent = task.entries.filter(e => e.selected).map((entry, index) => {
+                        const entryParts = [entry.duration ? `耗时 ${entry.duration}` : '', entry.totalSize].filter(Boolean).join(' • ');
+                        return `
+                            <div class="flex items-center gap-3 py-2 ${index > 0 ? 'border-t border-slate-100' : ''}">
+                                <div class="w-10 h-7 bg-slate-100 rounded overflow-hidden shrink-0">
+                                    ${entry.thumbnail ? `<img src="${entry.thumbnail}" class="w-full h-full object-cover" onerror="this.src=''">` : ''}
+                                </div>
+                                <div class="flex-1 min-w-0">
+                                    <div class="text-xs font-medium text-slate-700 truncate" title="${entry.title}">${entry.title}</div>
+                                    ${entryParts ? `<div class="text-[10px] text-slate-400">${entryParts}</div>` : ''}
+                                </div>
+                                <span class="material-symbols-outlined text-[16px] ${entry.status === 'completed' ? 'text-green-500' : 'text-red-500'}">${entry.status === 'completed' ? 'check_circle' : 'error'}</span>
+                            </div>
+                        `;
+                    }).join('');
+
+                    behanceEntriesHtml = `
+                        <div class="mt-2">
+                            <button data-behance-toggle="${task.task_id}" class="flex items-center gap-1 text-xs text-slate-500 hover:text-primary transition-colors">
+                                <span class="material-symbols-outlined text-[16px] behance-expand-icon">expand_less</span>
+                                <span>${task.entries.filter(e => e.selected).length} 个视频</span>
+                            </button>
+                            <div data-behance-list="${task.task_id}" class="bg-slate-50 rounded-lg p-3 mt-2 max-h-[200px] overflow-y-auto">
+                                ${entriesContent}
+                            </div>
+                        </div>
+                    `;
+                }
+
+                progressBar = `
+                    <div class="mt-2 text-xs">
+                        ${formatInfo}
+                        <div class="flex items-center justify-between">
+                            <div class="flex items-center gap-2 text-green-600 font-bold status-text status-icon">
+                                <span class="material-symbols-outlined text-[16px]">check_circle</span>
+                                下载完成
+                            </div>
+                            <div class="text-[10px] text-slate-400 font-medium">${infoStr}</div>
+                        </div>
+                        ${behanceEntriesHtml}
+                    </div>
+                `;
+            } else if (task.status === 'failed' && !isCompleted) { // For active view, show failed status
+                const friendlyError = getFriendlyErrorMessage(task.error_message || '未知错误');
+                progressBar = `
+                    <div class="mt-2 flex items-center justify-between text-xs" title="${task.error_message || ''}">
+                        <div class="flex items-center gap-2 text-red-600 font-bold status-text status-icon">
+                            <span class="material-symbols-outlined text-[16px]">error</span>
+                            ${friendlyError}
+                        </div>
+                        <button data-retry="${task.task_id}" class="px-2 py-1 bg-blue-500 hover:bg-blue-600 text-white text-[10px] font-bold rounded transition-colors">
+                            重新解析
+                        </button>
+                    </div>
+                `;
+            } else if (isCompleted) { // For completed view, always show completed status
+                const dateStr = task.finishTime ? new Date(task.finishTime).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric' }) : '';
+                const parts = [dateStr, task.duration ? `耗时 ${task.duration}` : '', task.totalSize];
+                const infoStr = parts.filter(Boolean).join(' • ');
+                const formatInfo = task.format_summary ? `<div class="text-[11px] text-slate-500 font-medium mt-1">${escapeHtml(task.format_summary)}</div>` : '';
+
+                // Behance 已完成任务：展示每个视频
+                let behanceEntriesHtml = '';
+                if (task.isBehance && task.entries && task.entries.length > 0) {
+                    const entriesContent = task.entries.map((entry, index) => {
+                        const entryParts = [entry.duration ? `耗时 ${entry.duration}` : '', entry.totalSize].filter(Boolean).join(' • ');
+                        return `
+                            <div class="flex items-center gap-3 py-2 ${index > 0 ? 'border-t border-slate-100' : ''}">
+                                <div class="w-10 h-7 bg-slate-100 rounded overflow-hidden shrink-0">
+                                    ${entry.thumbnail ? `<img src="${entry.thumbnail}" class="w-full h-full object-cover" onerror="this.src=''">` : ''}
+                                </div>
+                                <div class="flex-1 min-w-0">
+                                    <div class="text-xs font-medium text-slate-700 truncate" title="${entry.title}">${entry.title}</div>
+                                    ${entryParts ? `<div class="text-[10px] text-slate-400">${entryParts}</div>` : ''}
+                                </div>
+                                <span class="material-symbols-outlined text-[16px] ${entry.status === 'completed' ? 'text-green-500' : 'text-red-500'}">${entry.status === 'completed' ? 'check_circle' : 'error'}</span>
+                            </div>
+                        `;
+                    }).join('');
+
+                    const isExpanded = behanceExpandedState[task.task_id] || false;
+                    behanceEntriesHtml = `
+                        <div class="mt-2">
+                            <button data-behance-toggle="${task.task_id}" class="flex items-center gap-1 text-xs text-slate-500 hover:text-primary transition-colors">
+                                <span class="material-symbols-outlined text-[16px] behance-expand-icon">${isExpanded ? 'expand_less' : 'expand_more'}</span>
+                                <span>${task.entries.length} 个视频</span>
+                            </button>
+                            <div data-behance-list="${task.task_id}" class="${isExpanded ? '' : 'hidden'} bg-slate-50 rounded-lg p-3 mt-2 max-h-[200px] overflow-y-auto">
+                                ${entriesContent}
+                            </div>
+                        </div>
+                    `;
+                }
+
+                progressBar = `
+                    <div class="mt-2 text-xs">
+                        ${formatInfo}
+                        <div class="flex items-center justify-between">
+                            <div class="flex items-center gap-2 text-green-600 font-bold status-text status-icon">
+                                <span class="material-symbols-outlined text-[16px]">check_circle</span>
+                                下载完成
+                            </div>
+                            <div class="text-[10px] text-slate-400 font-medium">${infoStr}</div>
+                        </div>
+                        ${behanceEntriesHtml}
+                    </div>
+                `;
+            }
+
+
+            let actionBtn = '';
+            if (!isCompleted) {
+                if (task.status === 'completed') {
+                    actionBtn = `
+                        <div class="flex items-center gap-1 shrink-0 flex-none min-w-fit">
+                            <button onclick="handleReparseCompletedTask('${task.task_id}')" class="px-2 py-1 rounded-md bg-slate-100 hover:bg-blue-50 text-slate-600 hover:text-blue-600 text-[10px] font-bold transition-colors shrink-0" title="重新解析并下载其他清晰度">重新解析</button>
+                            <button onclick="handleDeleteTask('${task.task_id}', true)" class="px-2 py-1 rounded-md bg-slate-100 hover:bg-red-50 text-slate-600 hover:text-red-600 text-[10px] font-bold transition-colors shrink-0" title="删除记录和文件">删除</button>
+                            <button onclick="handleDeleteTask('${task.task_id}', false)" class="px-2 py-1 rounded-md bg-slate-100 hover:bg-red-50 text-slate-600 hover:text-red-600 transition-colors shrink-0" title="仅删除记录">
+                                <span class="material-symbols-outlined text-[14px] leading-none">close</span>
+                            </button>
+                        </div>
+                    `;
+                } else {
+                    actionBtn = `
+                        <button data-cancel="${task.task_id}" class="text-slate-300 hover:text-red-500 transition-colors shrink-0">
+                            <span class="material-symbols-outlined text-[18px]">close</span>
+                        </button>
+                    `;
+                }
+            } else {
+                actionBtn = `
+                    <div class="flex items-center gap-1">
+                        <button onclick="handleReparseCompletedTask('${task.task_id}')" class="px-2 py-1 rounded-md bg-slate-100 hover:bg-blue-50 text-slate-600 hover:text-blue-600 text-[10px] font-bold transition-colors shrink-0" title="重新解析并下载其他清晰度">重新解析</button>
+                        <button onclick="handleDeleteTask('${task.task_id}', true)" class="px-2 py-1 rounded-md bg-slate-100 hover:bg-red-50 text-slate-600 hover:text-red-600 text-[10px] font-bold transition-colors shrink-0" title="删除记录和文件">删除</button>
+                        <button onclick="handleDeleteTask('${task.task_id}', false)" class="px-2 py-1 rounded-md bg-slate-100 hover:bg-red-50 text-slate-600 hover:text-red-600 transition-colors shrink-0" title="仅删除记录">
+                            <span class="material-symbols-outlined text-[14px] leading-none">close</span>
+                        </button>
+                    </div>
+                `;
+            }
+
+            const thumbUrl = task.thumbnail || '';
+            const safeThumbUrl = thumbUrl.replace(/'/g, "\\'"); // Escape quotes
+
+            return `
+                <div id="${isCompleted ? 'hist-' : ''}task-${task.task_id}" data-status="${task.status}" class="bg-white border border-slate-100 rounded-xl p-4 shadow-sm hover:shadow-md transition-all">
+                    <div class="flex gap-4">
+                        <div class="w-24 h-16 bg-slate-100 rounded-lg shrink-0 overflow-hidden relative group cursor-pointer" onclick="callApi('openFolder')">
+                            ${task.thumbnail ?
+                    `<img src="${task.thumbnail}" class="w-full h-full object-cover" onerror="handleImageError(this, '${safeThumbUrl}')">`
+                    : '<div class="w-full h-full flex items-center justify-center text-slate-300"><span class="material-symbols-outlined">movie</span></div>'}
+                            <div class="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                                <span class="material-symbols-outlined text-white">folder_open</span>
+                            </div>
+                        </div>
+                        <div class="flex-1 min-w-0">
+                            <div class="flex items-start justify-between gap-2">
+                                <h4 class="font-bold text-[#1A1C1E] text-sm truncate pr-2" title="${safeTitle}">${safeTitle}</h4>
+                                ${actionBtn}
+                            </div>
+                            <div class="text-xs text-slate-400 truncate mt-0.5 cursor-pointer hover:text-blue-500 transition-colors" data-open-url="${safeUrl}" title="点击打开视频">${safeUrl}</div>
+                            ${formatSelector}
+                            ${progressBar}
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function handleImageError(img, originalUrl) {
+            img.onerror = null;
+
+            // 1. 尝试去除裁剪参数
+            if (originalUrl && originalUrl.includes('@')) {
+                const cleanUrl = originalUrl.split('@')[0];
+                // 可以尝试重置 src 为 cleanUrl，但为避免闪烁直接走代理
+            }
+
+            try {
+                // 2. 使用后端代理下载 (绕过防盗链)
+                let proxyUrl = originalUrl;
+                if (proxyUrl && proxyUrl.includes('@')) proxyUrl = proxyUrl.split('@')[0];
+
+                if (proxyUrl && proxyUrl.startsWith('//')) proxyUrl = 'https:' + proxyUrl;
+
+                console.log('Trying proxy for image:', proxyUrl);
+                if (window.api && window.api.downloadImage) {
+                    const base64 = await window.api.downloadImage(proxyUrl);
+                    if (base64) {
+                        img.src = base64;
+                        return;
+                    }
+                }
+            } catch (e) {
+                console.error('Image proxy failed:', e);
+            }
+
+            // 3. 彻底失败，显示默认图标
+            const parent = img.parentElement;
+            if (parent) {
+                parent.innerHTML = '<div class="w-full h-full flex items-center justify-center text-slate-300"><span class="material-symbols-outlined">movie</span></div>';
+            }
+        }
+
+        function getStatusText(status) {
+            const statusMap = {
+                'pending': '准备中...',
+                'parsing': '正在解析视频信息...',
+                'waiting': '等待选择格式',
+                'downloading': '下载中...',
+                'processing': '处理中...',
+                'completed': '已完成',
+                'failed': '下载失败',
+                'cancelled': '取消中...'
+            };
+            return statusMap[status] || status;
+        }
+
+
+        function getFriendlyErrorMessage(msg) {
+            if (!msg) return '未知错误';
+            const m = msg.toLowerCase();
+            if (m.includes('sign in to confirm') || m.includes('login required')) {
+                return '验证失败：需更新 Cookie';
+            }
+            if (m.includes('network is unreachable') || m.includes('timed out') || m.includes('connection refused')) {
+                return '网络错误：请检查连接';
+            }
+            if (m.includes('requested format is not available')) {
+                return '格式失效：请重试或更新组件';
+            }
+            if (m.includes('fragment')) {
+                return '分片下载失败：网络波动';
+            }
+            if (m.includes('permission denied')) {
+                return '权限错误：无法写入文件';
+            }
+            if (msg.includes('JS 挑战未完成')) {
+                return 'YouTube 解析失败：请更新核心';
+            }
+            if (msg.includes('未检测到可用的 JavaScript Runtime')) {
+                return '缺少 JS 运行时：请安装 Node';
+            }
+            if (msg.includes('无法读取 Chrome 登录态')) {
+                return 'Chrome 被占用，请先关闭';
+            }
+            if (msg.includes('无法读取 Edge 登录态')) {
+                return 'Edge 被占用，请先关闭';
+            }
+            // Add more mappings as needed
+            // Return truncated original if no match, max 20 chars
+            return msg.length > 20 ? msg.substring(0, 20) + '...' : msg;
+        }
+
+        async function handleUpdateCore() {
+            const btn = document.getElementById('btn-update-core');
+            const originalText = btn.innerText;
+
+            if (originalText === '更新中...') return;
+
+            btn.innerText = '更新中...';
+            btn.className = 'text-xs text-gray-400 cursor-wait ml-2';
+
+            showToast('开始检查 yt-dlp 更新...', 'info');
+
+            try {
+                const res = await window.api.updateCore();
+                if (res.success) {
+                    if (res.isUpToDate) {
+                        showToast('已是最新版本！', 'success');
+                    } else {
+                        showToast('核心组件更新成功！', 'success');
+                    }
+                    const ver = res.version || await window.api.getYtdlpVersion();
+                    document.getElementById('ytdlp-version').innerText = ver;
+                } else {
+                    showToast('更新失败: ' + res.message, 'error');
+                }
+            } catch (e) {
+                showToast('更新出错: ' + e.message, 'error');
+            } finally {
+                btn.innerText = '检查更新';
+                btn.className = 'text-xs text-blue-500 hover:text-blue-700 ml-2';
+            }
+        }
+
+        function showToast(message, type = 'info') {
+            const colors = {
+                'info': 'bg-blue-500',
+                'success': 'bg-green-500',
+                'warning': 'bg-amber-500',
+                'error': 'bg-red-500'
+            };
+
+            const toast = document.createElement('div');
+            toast.className = `fixed bottom-6 right-6 ${colors[type]} text-white px-6 py-3 rounded-xl shadow-lg z-50 animate-fade-in`;
+            toast.textContent = message;
+            document.body.appendChild(toast);
+
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                toast.style.transition = 'opacity 0.3s';
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        }
+
+        // 暴露给全局 (解决 onclick 找不到的问题)
+        window.handleDeleteTask = handleDeleteTask;
+        window.handleReparseCompletedTask = handleReparseCompletedTask;
+        window.handleClearHistory = handleClearHistory;
+        window.handleUpdateCore = handleUpdateCore;
+        window.handleOpenExtensionFolder = handleOpenExtensionFolder;
+        window.handleCopyCookieSyncToken = handleCopyCookieSyncToken;
+        window.handleResetCookieSyncToken = handleResetCookieSyncToken;
+        window.handleActivatePluginSource = handleActivatePluginSource;
+        window.callApi = callApi;
+    </script>
+</body>
+
+<!-- Custom Confirm Modal -->
+<div id="confirm-modal" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50 hidden">
+    <div class="bg-white rounded-2xl p-6 shadow-xl max-w-sm w-full mx-4 transform transition-all">
+        <h3 id="confirm-modal-title" class="text-lg font-bold text-[#1A1C1E] mb-2">确认</h3>
+        <p id="confirm-modal-message" class="text-sm text-slate-500 mb-6">确定要执行此操作吗？</p>
+        <div class="flex justify-end gap-3">
+            <button id="confirm-modal-cancel"
+                class="px-4 py-2 text-sm font-bold text-slate-500 hover:bg-slate-100 rounded-lg transition-colors">取消</button>
+            <button id="confirm-modal-confirm"
+                class="px-4 py-2 text-sm font-bold text-white bg-red-500 hover:bg-red-600 rounded-lg transition-colors">确定</button>
+        </div>
+    </div>
+</div>
+
+</html>
