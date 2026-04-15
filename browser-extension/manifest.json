@@ -1,12 +1,13 @@
 {
   "manifest_version": 3,
   "name": "YT下载器 Cookie Sync",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "将浏览器 Cookie 自动同步到 YT下载器。",
   "permissions": [
     "cookies",
     "storage",
-    "alarms"
+    "alarms",
+    "downloads"
   ],
   "host_permissions": [
     "https://*.youtube.com/*",

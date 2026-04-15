@@ -15,6 +15,8 @@ function renderState(state) {
     document.getElementById('last-sync').textContent = formatTime(state.lastSyncAt);
     document.getElementById('last-count').textContent = String(state.lastCount || 0);
     document.getElementById('paired-state').textContent = state.paired ? '已配对' : '未配对';
+    document.getElementById('active-port').textContent = String(state.activePort || 38491);
+    document.getElementById('sync-mode').textContent = state.lastMode === 'folder-fallback' ? '目录兜底' : '本地接口';
     document.getElementById('token').value = state.token || '';
     document.getElementById('error').textContent = state.lastError || '';
 }

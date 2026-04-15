@@ -34,7 +34,10 @@ const BUNDLED_NODE_DIR = app.isPackaged
     : path.join(APP_DIR, 'node-runtime');
 const BUNDLED_NODE_EXE = path.join(BUNDLED_NODE_DIR, 'node.exe');
 const PLUGIN_COOKIE_FILE = path.join(DATA_DIR, 'browser_extension_cookies.txt');
+const COOKIE_SYNC_FALLBACK_DIR = path.join(require('os').homedir(), 'Downloads', 'YT下载器 Cookie Sync');
+const COOKIE_SYNC_FALLBACK_FILE = path.join(COOKIE_SYNC_FALLBACK_DIR, 'browser_extension_cookies.txt');
 const COOKIE_SYNC_PORT = 38491;
+const COOKIE_SYNC_PORT_CANDIDATES = [38491, 38492, 38493, 38494, 38495];
 const GITHUB_REPO = 'Danborad/YTdown';
 const APP_ICON = process.platform === 'win32'
     ? path.join(APP_DIR, 'icon.ico')
@@ -130,6 +133,7 @@ let completedTasks = loadTasks();
 let systemLogs = [];
 let ytdlpVersion = '检测中...';
 let cookieSyncServer = null;
+let cookieSyncServerPort = 0;
 let preferredJsRuntime = '';
 let jsRuntimeChecked = false;
 
@@ -138,7 +142,8 @@ saveConfig(config);
 function getCookieSyncStatus() {
     return {
         running: Boolean(cookieSyncServer),
-        port: config.cookie_sync_port || COOKIE_SYNC_PORT,
+        port: cookieSyncServerPort || config.cookie_sync_port || COOKIE_SYNC_PORT,
+        portCandidates: COOKIE_SYNC_PORT_CANDIDATES,
         token: config.cookie_sync_token,
         browser: config.cookie_sync_browser || '',
         paired: Boolean(config.cookie_sync_paired_at),
@@ -148,6 +153,8 @@ function getCookieSyncStatus() {
         extensionDir: EXTENSION_DIR,
         sourceActive: config.cookie_source === 'plugin-sync',
         cookiesFile: PLUGIN_COOKIE_FILE,
+        fallbackCookiesFile: COOKIE_SYNC_FALLBACK_FILE,
+        lastMode: config.cookie_sync_last_mode || '',
         sites: COOKIE_SYNC_SITES
     };
 }
@@ -201,20 +208,96 @@ function sendCookieSyncUpdate() {
 }
 
 function shouldAutoUsePluginSync() {
-    return !config.cookies_file || config.cookie_source === 'plugin-sync' || config.cookies_file === PLUGIN_COOKIE_FILE;
+    return !config.cookies_file
+        || config.cookie_source === 'plugin-sync'
+        || config.cookies_file === PLUGIN_COOKIE_FILE
+        || config.cookies_file === COOKIE_SYNC_FALLBACK_FILE;
 }
 
 function activatePluginCookieSource() {
-    if (!fs.existsSync(PLUGIN_COOKIE_FILE)) {
+    const pluginCookiePath = getBestCookieFilePath();
+    if (!pluginCookiePath) {
         return { success: false, message: '还没有收到插件同步的 Cookie，请先在浏览器插件中完成连接并同步' };
     }
 
-    config.cookies_file = PLUGIN_COOKIE_FILE;
+    config.cookies_file = pluginCookiePath;
     config.cookie_source = 'plugin-sync';
     config.cookie_browser = '';
     saveConfig(config);
     sendCookieSyncUpdate();
-    return { success: true, path: PLUGIN_COOKIE_FILE };
+    return { success: true, path: pluginCookiePath };
+}
+
+function ensureFallbackCookieDir() {
+    fs.mkdirSync(COOKIE_SYNC_FALLBACK_DIR, { recursive: true });
+}
+
+function getBestCookieFilePath() {
+    if (fs.existsSync(PLUGIN_COOKIE_FILE)) return PLUGIN_COOKIE_FILE;
+    if (fs.existsSync(COOKIE_SYNC_FALLBACK_FILE)) return COOKIE_SYNC_FALLBACK_FILE;
+    return '';
+}
+
+function applyPluginCookieSource(cookiePath, syncMode) {
+    config.cookie_sync_last_mode = syncMode || 'local-api';
+    if (shouldAutoUsePluginSync()) {
+        config.cookies_file = cookiePath;
+        config.cookie_source = 'plugin-sync';
+        config.cookie_browser = '';
+    }
+}
+
+function saveSyncedCookies(cookies, syncMode = 'local-api') {
+    const normalizedCookies = normalizeSyncedCookies(cookies);
+    const outputPath = syncMode === 'folder-fallback' ? COOKIE_SYNC_FALLBACK_FILE : PLUGIN_COOKIE_FILE;
+
+    if (syncMode === 'folder-fallback') {
+        ensureFallbackCookieDir();
+    }
+
+    fs.writeFileSync(outputPath, buildNetscapeCookieFile(normalizedCookies), 'utf-8');
+    applyPluginCookieSource(outputPath, syncMode);
+    config.cookie_sync_last_sync = new Date().toISOString();
+    config.cookie_sync_last_count = normalizedCookies.length;
+    saveConfig(config);
+
+    log('INFO', `[Cookie Sync] 已同步 ${normalizedCookies.length} 个 Cookie (${config.cookie_sync_browser || '浏览器插件'}${syncMode === 'folder-fallback' ? ' / 目录兜底' : ''})`);
+    sendCookieSyncUpdate();
+
+    return {
+        cookieCount: normalizedCookies.length,
+        outputPath,
+        sourceActive: config.cookie_source === 'plugin-sync',
+        mode: syncMode
+    };
+}
+
+function resolveActiveCookieFile() {
+    const preferredPaths = [config.cookies_file, PLUGIN_COOKIE_FILE, COOKIE_SYNC_FALLBACK_FILE]
+        .filter(Boolean);
+
+    for (const filePath of preferredPaths) {
+        if (fs.existsSync(filePath)) {
+            return filePath;
+        }
+    }
+
+    return '';
+}
+
+function syncCookieFilePreference() {
+    const activeCookieFile = resolveActiveCookieFile();
+    if (!activeCookieFile) return;
+
+    if (config.cookie_source === 'plugin-sync' || !config.cookies_file || !fs.existsSync(config.cookies_file)) {
+        config.cookies_file = activeCookieFile;
+        if (activeCookieFile === PLUGIN_COOKIE_FILE || activeCookieFile === COOKIE_SYNC_FALLBACK_FILE) {
+            config.cookie_source = 'plugin-sync';
+            config.cookie_browser = '';
+            config.cookie_sync_last_mode = activeCookieFile === COOKIE_SYNC_FALLBACK_FILE ? 'folder-fallback' : (config.cookie_sync_last_mode || 'local-api');
+        }
+        saveConfig(config);
+    }
 }
 
 function normalizeVersion(version) {
@@ -357,10 +440,8 @@ function writeJson(res, statusCode, payload) {
     res.end(JSON.stringify(payload));
 }
 
-function startCookieSyncServer() {
-    if (cookieSyncServer) return;
-
-    cookieSyncServer = http.createServer(async (req, res) => {
+function createCookieSyncServer() {
+    return http.createServer(async (req, res) => {
         if (!req.url) {
             writeJson(res, 400, { success: false, message: '无效请求' });
             return;
@@ -395,6 +476,7 @@ function startCookieSyncServer() {
             if (urlObj.pathname === '/api/cookie-sync/pair') {
                 config.cookie_sync_browser = payload.browserName || '';
                 config.cookie_sync_paired_at = new Date().toISOString();
+                config.cookie_sync_last_mode = 'local-api';
                 saveConfig(config);
                 log('INFO', `[Cookie Sync] 浏览器插件已配对: ${config.cookie_sync_browser || '未知浏览器'}`);
                 sendCookieSyncUpdate();
@@ -403,33 +485,23 @@ function startCookieSyncServer() {
                     message: '配对成功',
                     sites: COOKIE_SYNC_SITES,
                     filePath: PLUGIN_COOKIE_FILE,
+                    port: cookieSyncServerPort,
                     sourceActive: config.cookie_source === 'plugin-sync'
                 });
                 return;
             }
 
             if (urlObj.pathname === '/api/cookie-sync/sync') {
-                const normalizedCookies = normalizeSyncedCookies(payload.cookies);
-                fs.writeFileSync(PLUGIN_COOKIE_FILE, buildNetscapeCookieFile(normalizedCookies), 'utf-8');
-
                 config.cookie_sync_browser = payload.browserName || config.cookie_sync_browser || '';
-                config.cookie_sync_last_sync = new Date().toISOString();
-                config.cookie_sync_last_count = normalizedCookies.length;
-
-                if (shouldAutoUsePluginSync()) {
-                    config.cookies_file = PLUGIN_COOKIE_FILE;
-                    config.cookie_source = 'plugin-sync';
-                    config.cookie_browser = '';
-                }
-
-                saveConfig(config);
-                log('INFO', `[Cookie Sync] 已同步 ${normalizedCookies.length} 个 Cookie (${config.cookie_sync_browser || '浏览器插件'})`);
-                sendCookieSyncUpdate();
+                const result = saveSyncedCookies(payload.cookies, 'local-api');
                 writeJson(res, 200, {
                     success: true,
                     message: '同步成功',
-                    cookieCount: normalizedCookies.length,
-                    sourceActive: config.cookie_source === 'plugin-sync'
+                    cookieCount: result.cookieCount,
+                    outputPath: result.outputPath,
+                    port: cookieSyncServerPort,
+                    mode: result.mode,
+                    sourceActive: result.sourceActive
                 });
                 return;
             }
@@ -440,15 +512,48 @@ function startCookieSyncServer() {
             writeJson(res, 500, { success: false, message: error.message });
         }
     });
+}
 
-    cookieSyncServer.listen(config.cookie_sync_port || COOKIE_SYNC_PORT, '127.0.0.1', () => {
-        log('INFO', `[Cookie Sync] 本地同步服务已启动: http://127.0.0.1:${config.cookie_sync_port || COOKIE_SYNC_PORT}`);
-        sendCookieSyncUpdate();
-    });
+function startCookieSyncServer() {
+    if (cookieSyncServer) return;
 
-    cookieSyncServer.on('error', (error) => {
-        log('ERROR', `[Cookie Sync] 本地同步服务异常: ${error.message}`);
-    });
+    const tryListen = (index = 0) => {
+        const port = COOKIE_SYNC_PORT_CANDIDATES[index];
+        if (!port) {
+            log('ERROR', `[Cookie Sync] 所有候选端口均不可用: ${COOKIE_SYNC_PORT_CANDIDATES.join(', ')}`);
+            return;
+        }
+
+        const server = createCookieSyncServer();
+
+        server.once('error', (error) => {
+            if (error && error.code === 'EADDRINUSE') {
+                log('WARN', `[Cookie Sync] 端口 ${port} 已被占用，尝试下一个端口`);
+                tryListen(index + 1);
+                return;
+            }
+
+            log('ERROR', `[Cookie Sync] 本地同步服务异常: ${error.message}`);
+        });
+
+        server.listen(port, '127.0.0.1', () => {
+            cookieSyncServer = server;
+            cookieSyncServerPort = port;
+            config.cookie_sync_port = port;
+            saveConfig(config);
+            log('INFO', `[Cookie Sync] 本地同步服务已启动: http://127.0.0.1:${port}`);
+            if (port !== COOKIE_SYNC_PORT) {
+                log('INFO', `[Cookie Sync] 当前使用备用端口 ${port}`);
+            }
+            sendCookieSyncUpdate();
+        });
+
+        server.on('error', (error) => {
+            log('ERROR', `[Cookie Sync] 本地同步服务异常: ${error.message}`);
+        });
+    };
+
+    tryListen(0);
 }
 
 // ==================== 日志系统 ====================
@@ -477,7 +582,8 @@ function loadConfig() {
         cookie_sync_browser: '',
         cookie_sync_last_sync: '',
         cookie_sync_last_count: 0,
-        cookie_sync_paired_at: ''
+        cookie_sync_paired_at: '',
+        cookie_sync_last_mode: ''
     };
 
     try {
@@ -559,6 +665,7 @@ app.whenReady().then(() => {
     log('INFO', `APP_DIR: ${APP_DIR}`);
     log('INFO', `DATA_DIR: ${DATA_DIR}`);
     log('INFO', `YTDLP_EXE: ${getYtdlpExePath()}`);
+    syncCookieFilePreference();
 
     // 检查版本
     checkYtdlpVersion();
@@ -597,6 +704,7 @@ app.on('before-quit', () => {
     if (cookieSyncServer) {
         cookieSyncServer.close();
         cookieSyncServer = null;
+        cookieSyncServerPort = 0;
     }
 });
 
@@ -771,6 +879,7 @@ ipcMain.handle('reset-cookie-sync-token', () => {
     config.cookie_sync_browser = '';
     config.cookie_sync_last_sync = '';
     config.cookie_sync_last_count = 0;
+    config.cookie_sync_last_mode = '';
     saveConfig(config);
     log('INFO', '[Cookie Sync] 已重新生成配对码');
     sendCookieSyncUpdate();
@@ -1206,10 +1315,11 @@ function parseFormats(task) {
     appendPreferredJsRuntime(args);
 
     // Cookie logic (same as downloadVideo)
+    const activeCookieFile = resolveActiveCookieFile();
     if (config.cookie_source === 'browser' && config.cookie_browser) {
         args.push('--cookies-from-browser', config.cookie_browser);
-    } else if (config.cookies_file && fs.existsSync(config.cookies_file)) {
-        args.push('--cookies', config.cookies_file);
+    } else if (activeCookieFile) {
+        args.push('--cookies', activeCookieFile);
     }
 
     // DEBUG: Run -F to compare
@@ -1217,8 +1327,8 @@ function parseFormats(task) {
     appendPreferredJsRuntime(debugArgs);
     if (config.cookie_source === 'browser' && config.cookie_browser) {
         debugArgs.push('--cookies-from-browser', config.cookie_browser);
-    } else if (config.cookies_file && fs.existsSync(config.cookies_file)) {
-        debugArgs.push('--cookies', config.cookies_file);
+    } else if (activeCookieFile) {
+        debugArgs.push('--cookies', activeCookieFile);
     }
     log('INFO', `[Debug] Executing -F check: ${getYtdlpExePath()} ${debugArgs.join(' ')}`);
     require('child_process').execFile(getYtdlpExePath(), debugArgs, { env: getChildProcessEnv() }, (err, stdout) => {
@@ -1470,10 +1580,11 @@ function downloadVideo(task) {
     task.startTime = Date.now();
 
     // Cookie logic
+    const activeCookieFile = resolveActiveCookieFile();
     if (config.cookie_source === 'browser' && config.cookie_browser) {
         args.push('--cookies-from-browser', config.cookie_browser);
-    } else if (config.cookies_file && fs.existsSync(config.cookies_file)) {
-        args.push('--cookies', config.cookies_file);
+    } else if (activeCookieFile) {
+        args.push('--cookies', activeCookieFile);
     }
 
     const proc = spawn(getYtdlpExePath(), args, { env: getChildProcessEnv() });
@@ -1641,8 +1752,9 @@ function downloadBehanceVideos(task) {
         ];
         appendPreferredJsRuntime(args);
 
-        if (config.cookies_file && fs.existsSync(config.cookies_file)) {
-            args.push('--cookies', config.cookies_file);
+        const activeCookieFile = resolveActiveCookieFile();
+        if (activeCookieFile) {
+            args.push('--cookies', activeCookieFile);
         }
 
         const proc = spawn(getYtdlpExePath(), args, { env: getChildProcessEnv() });
