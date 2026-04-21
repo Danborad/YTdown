@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "YT下载器 Cookie Sync",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "将浏览器 Cookie 自动同步到 YT下载器。",
   "permissions": [
     "cookies",

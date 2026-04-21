@@ -1227,7 +1227,7 @@ ipcMain.handle('download-image', async (event, url) => {
             log('INFO', `图片代理: 处理后 URL = ${processedUrl}`);
 
             const request = net.request(processedUrl);
-            request.setHeader('Referer', 'https://www.bilibili.com/');
+            request.setHeader('Referer', getImageReferer(processedUrl));
             request.setHeader('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
             request.on('response', (response) => {
@@ -1264,6 +1264,24 @@ ipcMain.handle('download-image', async (event, url) => {
         }
     });
 });
+
+function getImageReferer(imageUrl) {
+    try {
+        const hostname = new URL(imageUrl).hostname.toLowerCase();
+        if (hostname.includes('vimeo.com') || hostname.includes('vimeocdn.com')) {
+            return 'https://vimeo.com/';
+        }
+        if (hostname.includes('bilibili.com') || hostname.includes('hdslb.com')) {
+            return 'https://www.bilibili.com/';
+        }
+        if (hostname.includes('ytimg.com') || hostname.includes('youtube.com') || hostname.includes('googlevideo.com')) {
+            return 'https://www.youtube.com/';
+        }
+        return `https://${hostname}/`;
+    } catch (error) {
+        return 'https://www.bilibili.com/';
+    }
+}
 
 // ==================== yt-dlp 封装 ====================
 
@@ -1322,31 +1340,25 @@ function parseFormats(task) {
         args.push('--cookies', activeCookieFile);
     }
 
-    // DEBUG: Run -F to compare
-    const debugArgs = ['-F', '--no-playlist', '--no-cache-dir', '--no-update', task.url];
-    appendPreferredJsRuntime(debugArgs);
-    if (config.cookie_source === 'browser' && config.cookie_browser) {
-        debugArgs.push('--cookies-from-browser', config.cookie_browser);
-    } else if (activeCookieFile) {
-        debugArgs.push('--cookies', activeCookieFile);
-    }
-    log('INFO', `[Debug] Executing -F check: ${getYtdlpExePath()} ${debugArgs.join(' ')}`);
-    require('child_process').execFile(getYtdlpExePath(), debugArgs, { env: getChildProcessEnv() }, (err, stdout) => {
-        if (stdout) {
-            // Log only relevant lines (4K/8K) to avoid spam?
-            // User wants to see 314 etc.
-            // Just log first 50 lines or filtered
-            log('INFO', `[Debug -F Output FULL]:\n${stdout}`);
-        }
-    });
     log('INFO', `[parseFormats] 执行命令: yt-dlp ${args.join(' ')}`);
 
-    execFile(getYtdlpExePath(), args, { maxBuffer: 50 * 1024 * 1024, env: getChildProcessEnv() }, (error, stdout, stderr) => {
+    const runParse = (attempt = 1) => execFile(getYtdlpExePath(), args, { maxBuffer: 50 * 1024 * 1024, env: getChildProcessEnv() }, async (error, stdout, stderr) => {
         log('INFO', '[parseFormats] 执行完成');
         if (error) {
             log('ERROR', `[parseFormats] 错误: ${error.message}`);
             if (stderr) log('ERROR', `[parseFormats] stderr: ${stderr}`);
             log('ERROR', `[parseFormats] System PATH: ${process.env.PATH}`);
+
+            const rawMessage = `${stderr || ''}\n${error.message || ''}`;
+            const isRetriableVimeo503 = attempt === 1
+                && task.url.includes('vimeo.com')
+                && /503|service unavailable/i.test(rawMessage);
+            if (isRetriableVimeo503) {
+                log('WARN', '[parseFormats] Vimeo 解析遇到 503，1200ms 后自动重试一次');
+                await delay(1200);
+                runParse(2);
+                return;
+            }
 
             task.status = 'failed';
             task.error_message = normalizeYtdlpErrorMessage(stderr || error.message, task);
@@ -1367,7 +1379,7 @@ function parseFormats(task) {
 
                 task.isBehance = true;
                 task.title = info.title || info.entries[0]?.title || task.url;
-                task.thumbnail = info.entries[0]?.thumbnail || '';
+                task.thumbnail = pickBestThumbnail(info) || pickBestThumbnail(info.entries[0]) || '';
 
                 // 解析每个视频
                 task.entries = info.entries.map((entry, index) => {
@@ -1375,7 +1387,7 @@ function parseFormats(task) {
                     return {
                         id: index,
                         title: entry.title || `视频 ${index + 1}`,
-                        thumbnail: entry.thumbnail || '',
+                        thumbnail: pickBestThumbnail(entry) || '',
                         url: entry.webpage_url || entry.url || task.url,
                         formats: entryFormats,
                         selected: true,  // 默认全选
@@ -1390,7 +1402,7 @@ function parseFormats(task) {
             } else {
                 // 单视频处理（原有逻辑）
                 task.title = info.title || task.url;
-                task.thumbnail = info.thumbnail || '';
+                task.thumbnail = pickBestThumbnail(info) || '';
                 task.formats = parseVideoFormats(info.formats || []);
                 task.status = 'waiting';
                 sendTaskUpdate(task);
@@ -1401,15 +1413,43 @@ function parseFormats(task) {
             sendTaskUpdate(task);
         }
     });
+
+    runParse();
+}
+
+function pickBestThumbnail(info) {
+    if (!info || typeof info !== 'object') return '';
+
+    const directThumbnail = String(info.thumbnail || '').trim();
+    if (directThumbnail) return directThumbnail;
+
+    const thumbnails = Array.isArray(info.thumbnails) ? info.thumbnails : [];
+    if (thumbnails.length === 0) return '';
+
+    const sorted = [...thumbnails]
+        .filter((item) => item && item.url)
+        .sort((left, right) => {
+            const leftScore = (left.preference || 0) * 1000000 + (left.width || 0) * (left.height || 0);
+            const rightScore = (right.preference || 0) * 1000000 + (right.width || 0) * (right.height || 0);
+            return rightScore - leftScore;
+        });
+
+    return sorted[0]?.url || '';
 }
 
 // 辅助函数：解析视频格式列表
 function parseVideoFormats(allFormats) {
     const formats = [
-        { format_id: 'bestvideo+bestaudio/best', resolution: '🔥 最高画质', ext: 'auto', filesize: '自动' }
+        { format_id: 'bestvideo+bestaudio/best', resolution: '🔥 最高画质', ext: 'auto', filesize: '自动', hasAudio: true }
     ];
 
     const seenHeights = new Set();
+    const hasMp4CompatibleAudio = allFormats.some((f) => {
+        if (!f || f.acodec === 'none') return false;
+        const ext = String(f.ext || '').toLowerCase();
+        const acodec = String(f.acodec || '').toLowerCase();
+        return ['m4a', 'mp4', 'aac'].includes(ext) || acodec.includes('mp4a') || acodec.includes('aac');
+    });
     log('INFO', `[parseVideoFormats] 收到 ${allFormats.length} 个原始格式`);
 
     const rawFormats = allFormats
@@ -1417,6 +1457,12 @@ function parseVideoFormats(allFormats) {
         .sort((a, b) => {
             const hDiff = (b.height || 0) - (a.height || 0);
             if (hDiff !== 0) return hDiff;
+            const aHasAudio = a.acodec && a.acodec !== 'none' ? 1 : 0;
+            const bHasAudio = b.acodec && b.acodec !== 'none' ? 1 : 0;
+            if (bHasAudio !== aHasAudio) return bHasAudio - aHasAudio;
+            const aIsMp4 = a.ext === 'mp4' ? 1 : 0;
+            const bIsMp4 = b.ext === 'mp4' ? 1 : 0;
+            if (bIsMp4 !== aIsMp4) return bIsMp4 - aIsMp4;
             return (b.tbr || 0) - (a.tbr || 0);
         });
 
@@ -1446,15 +1492,45 @@ function parseVideoFormats(allFormats) {
         }
         if (f.fps > 30) extra += ` ${f.fps}fps`;
 
+        const hasAudio = Boolean(f.acodec && f.acodec !== 'none');
+        const extLower = String(f.ext || '').toLowerCase();
+        const acodecLower = String(f.acodec || '').toLowerCase();
+        const mp4Compatible = hasAudio
+            ? (extLower === 'mp4' || acodecLower.includes('mp4a') || acodecLower.includes('aac'))
+            : hasMp4CompatibleAudio;
+
         formats.push({
             format_id: f.format_id,
             resolution,
             ext: extra,
-            filesize: f.filesize ? formatBytes(f.filesize) : '未知'
+            filesize: f.filesize ? formatBytes(f.filesize) : '未知',
+            hasAudio,
+            mp4Compatible
         });
     }
 
     return formats;
+}
+
+function extractFormatHeight(value) {
+    const text = String(value || '');
+    const pMatch = text.match(/(\d+)p/i);
+    if (pMatch) {
+        return parseInt(pMatch[1], 10);
+    }
+
+    const dimensionMatch = text.match(/(\d{3,4})\s*[xX]\s*(\d{3,4})/);
+    if (dimensionMatch) {
+        return parseInt(dimensionMatch[2], 10);
+    }
+
+    return 0;
+}
+
+function normalizeFormatExt(ext) {
+    const text = String(ext || '').trim();
+    if (!text) return '';
+    return text.split(/\s+/)[0].toLowerCase();
 }
 
 function getFormatSummary(task) {
@@ -1462,16 +1538,15 @@ function getFormatSummary(task) {
     if (selectedFormat) {
         if (task.format_id === 'bestvideo+bestaudio/best') {
             const numericHeights = (task.formats || [])
-                .map(f => {
-                    const match = String(f.resolution || '').match(/(\d+)p/i);
-                    return match ? parseInt(match[1], 10) : 0;
-                })
+                .map(f => extractFormatHeight(f.resolution))
                 .filter(Boolean);
             const bestHeight = numericHeights.length > 0 ? `${Math.max(...numericHeights)}p` : '最高画质';
             return `${bestHeight} · ${getPreferredContainer(task)}`;
         }
 
-        return `${selectedFormat.resolution || task.format_id} · ${selectedFormat.ext || getPreferredContainer(task)}`;
+        const resolutionText = selectedFormat.resolution || task.format_id;
+        const extText = normalizeFormatExt(selectedFormat.ext) || getPreferredContainer(task);
+        return `${resolutionText} · ${extText}`;
     }
 
     if (task.format_id === 'bestvideo+bestaudio/best') {
@@ -1485,12 +1560,9 @@ function getPreferredContainer(task) {
     const selectedFormat = (task.formats || []).find(f => f.format_id === task.format_id);
     if (!selectedFormat) return 'mkv';
 
-    const resolution = String(selectedFormat.resolution || '');
-    if (/^\d+p$/i.test(resolution)) {
-        const height = parseInt(resolution, 10);
-        if (!Number.isNaN(height) && height <= 1080) {
-            return 'mp4';
-        }
+    const height = extractFormatHeight(selectedFormat.resolution);
+    if (height > 0 && height <= 1080 && selectedFormat.mp4Compatible !== false) {
+        return 'mp4';
     }
 
     return 'mkv';
@@ -1556,15 +1628,30 @@ function isCompletedFileNameBusy(baseName, preferredExt) {
     return fs.existsSync(path.join(config.output_dir, `${baseName}.${preferredExt}`));
 }
 
-function downloadVideo(task) {
-    let formatStr = task.format_id || 'bestvideo+bestaudio/best';
-
-    // 如果是纯数字格式ID，添加音频
-    if (/^\d+$/.test(formatStr)) {
-        formatStr = `${formatStr}+bestaudio/best`;
+function buildDownloadFormatSelector(task, preferredContainer) {
+    const selectedFormatId = task.format_id || 'bestvideo+bestaudio/best';
+    const selectedFormat = (task.formats || []).find(f => f.format_id === selectedFormatId);
+    if (selectedFormatId === 'bestvideo+bestaudio/best') {
+        if (preferredContainer === 'mp4') {
+            return 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/bestvideo+bestaudio/best';
+        }
+        return 'bestvideo+bestaudio/best';
     }
 
+    if (selectedFormat?.hasAudio) {
+        return selectedFormatId;
+    }
+
+    if (preferredContainer === 'mp4') {
+        return `${selectedFormatId}+bestaudio[ext=m4a]/${selectedFormatId}+bestaudio/best[ext=mp4]/best`;
+    }
+
+    return `${selectedFormatId}+bestaudio/best`;
+}
+
+function downloadVideo(task) {
     const preferredContainer = getPreferredContainer(task);
+    const formatStr = buildDownloadFormatSelector(task, preferredContainer);
     const outputTemplate = createUniqueOutputTemplate(task.title, preferredContainer);
     const args = [
         '--format', formatStr,
@@ -1572,9 +1659,13 @@ function downloadVideo(task) {
         '--no-playlist',
         '--no-cache-dir',
         '--no-update',
-        '--merge-output-format', preferredContainer,
         task.url
     ];
+    if (preferredContainer === 'mp4') {
+        args.splice(args.length - 1, 0, '--recode-video', 'mp4');
+    } else {
+        args.splice(args.length - 1, 0, '--merge-output-format', preferredContainer);
+    }
     appendPreferredJsRuntime(args);
 
     task.startTime = Date.now();
@@ -1639,6 +1730,7 @@ function downloadVideo(task) {
             const seconds = Math.floor((durationMs % 60000) / 1000);
             task.duration = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
             task.finishTime = Date.now();
+            task.format_summary = getFormatSummary(task);
 
             // 添加到已完成列表
             completedTasks.unshift({
@@ -1648,7 +1740,7 @@ function downloadVideo(task) {
                 thumbnail: task.thumbnail,
                 status: 'completed',
                 format_id: task.format_id,
-                format_summary: getFormatSummary(task),
+                format_summary: task.format_summary,
                 totalSize: task.totalSize,
                 duration: task.duration,
                 finishTime: task.finishTime
@@ -1744,12 +1836,12 @@ function downloadBehanceVideos(task) {
             '-f', formatStr,
             '-o', outputTemplate,
             '--no-playlist',
-            '--merge-output-format', 'mp4',
             '--embed-thumbnail',
             '--no-cache-dir',
             '--no-update',
             entry.url
         ];
+        args.splice(args.length - 1, 0, '--recode-video', 'mp4');
         appendPreferredJsRuntime(args);
 
         const activeCookieFile = resolveActiveCookieFile();
