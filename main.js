@@ -1065,7 +1065,9 @@ ipcMain.handle('start-download', async (event, url) => {
         formats: [],
         error_message: '',
         cookie_source: config.cookie_source,
-        cookie_browser: config.cookie_browser || ''
+        cookie_browser: config.cookie_browser || '',
+        _parseRequestId: 0,
+        _parseStartedAt: 0
     };
 
     activeTasks[taskId] = task;
@@ -1128,6 +1130,12 @@ ipcMain.handle('cancel-task', async (event, taskId) => {
             return { success: false, error: '取消失败：后台进程仍在运行' };
         }
 
+        if (!task.formats || task.formats.length === 0) {
+            delete activeTasks[taskId];
+            log('INFO', `[Cancel] 解析任务 ${taskId} 已移除`);
+            return { success: true };
+        }
+
         cleanupCancelledArtifacts(task);
         task._cancelRequested = false;
         task._process = null;
@@ -1135,7 +1143,7 @@ ipcMain.handle('cancel-task', async (event, taskId) => {
         task.speed = '';
         task.eta = '';
         task.error_message = '';
-        task.status = task.formats && task.formats.length > 0 ? 'waiting' : 'parsing';
+        task.status = 'waiting';
         log('INFO', `[Cancel] 任务 ${taskId} 已成功取消`);
         sendTaskUpdate(task);
         return { success: true };
@@ -1321,6 +1329,11 @@ function normalizeYtdlpErrorMessage(message, task) {
 }
 
 function parseFormats(task) {
+    if (!task || task._cancelRequested) return;
+
+    task._parseRequestId = (task._parseRequestId || 0) + 1;
+    task._parseStartedAt = Date.now();
+    const currentParseRequestId = task._parseRequestId;
     log('INFO', `[parseFormats] 开始解析: ${task.url}`);
 
     // 检测是否为 Behance URL（Behance 页面可能包含多个视频）
@@ -1342,7 +1355,12 @@ function parseFormats(task) {
 
     log('INFO', `[parseFormats] 执行命令: yt-dlp ${args.join(' ')}`);
 
-    const runParse = (attempt = 1) => execFile(getYtdlpExePath(), args, { maxBuffer: 50 * 1024 * 1024, env: getChildProcessEnv() }, async (error, stdout, stderr) => {
+    const child = execFile(getYtdlpExePath(), args, { maxBuffer: 50 * 1024 * 1024, env: getChildProcessEnv() }, async (error, stdout, stderr) => {
+        if (!activeTasks[task.task_id] || task._cancelRequested || task._parseRequestId !== currentParseRequestId) {
+            log('INFO', `[parseFormats] 忽略过期解析结果: ${task.task_id}`);
+            return;
+        }
+
         log('INFO', '[parseFormats] 执行完成');
         if (error) {
             log('ERROR', `[parseFormats] 错误: ${error.message}`);
@@ -1356,7 +1374,9 @@ function parseFormats(task) {
             if (isRetriableVimeo503) {
                 log('WARN', '[parseFormats] Vimeo 解析遇到 503，1200ms 后自动重试一次');
                 await delay(1200);
-                runParse(2);
+                if (activeTasks[task.task_id] && !task._cancelRequested && task._parseRequestId === currentParseRequestId) {
+                    parseFormats(task);
+                }
                 return;
             }
 
@@ -1414,7 +1434,42 @@ function parseFormats(task) {
         }
     });
 
-    runParse();
+    task._process = child;
+    const parseTimeout = setTimeout(() => {
+        if (!activeTasks[task.task_id] || task._cancelRequested || task._parseRequestId !== currentParseRequestId) {
+            return;
+        }
+
+        log('WARN', `[parseFormats] 解析超时: ${task.task_id}`);
+        try {
+            child.kill('SIGTERM');
+            if (child.pid) {
+                spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, encoding: 'utf8' });
+            }
+        } catch (timeoutError) {
+            log('WARN', `[parseFormats] 超时终止进程失败: ${timeoutError.message}`);
+        }
+
+        if (activeTasks[task.task_id] && !task._cancelRequested && task._parseRequestId === currentParseRequestId) {
+            task.status = 'failed';
+            task.error_message = '解析超时，请重试';
+            sendTaskUpdate(task);
+        }
+    }, 45000);
+
+    child.on('close', () => {
+        clearTimeout(parseTimeout);
+        if (task._process === child) {
+            task._process = null;
+        }
+    });
+
+    child.on('error', () => {
+        clearTimeout(parseTimeout);
+        if (task._process === child) {
+            task._process = null;
+        }
+    });
 }
 
 function pickBestThumbnail(info) {
