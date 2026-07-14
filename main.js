@@ -8,6 +8,7 @@ const path = require('path');
 const fs = require('fs');
 const http = require('http');
 const https = require('https');
+const nodeNet = require('net');
 const crypto = require('crypto');
 const { spawn, execFile, spawnSync } = require('child_process');
 const packageJson = require('./package.json');
@@ -38,6 +39,9 @@ const COOKIE_SYNC_FALLBACK_DIR = path.join(require('os').homedir(), 'Downloads',
 const COOKIE_SYNC_FALLBACK_FILE = path.join(COOKIE_SYNC_FALLBACK_DIR, 'browser_extension_cookies.txt');
 const COOKIE_SYNC_PORT = 38491;
 const COOKIE_SYNC_PORT_CANDIDATES = [38491, 38492, 38493, 38494, 38495];
+const YTDLP_OUTPUT_MARKER = '__YTDLP_FILE__:';
+const MAX_PROXY_IMAGE_BYTES = 10 * 1024 * 1024;
+const PROXY_IMAGE_TIMEOUT_MS = 15000;
 const GITHUB_REPO = 'Danborad/YTdown';
 const APP_ICON = process.platform === 'win32'
     ? path.join(APP_DIR, 'icon.ico')
@@ -430,37 +434,67 @@ function readRequestBody(req) {
     });
 }
 
-function writeJson(res, statusCode, payload) {
-    res.writeHead(statusCode, {
+function isAllowedCookieSyncOrigin(origin) {
+    return !origin || /^chrome-extension:\/\/[a-p]{32}$/i.test(origin);
+}
+
+function cookieSyncTokensMatch(providedToken, expectedToken) {
+    const provided = Buffer.from(String(providedToken || '').trim().toUpperCase());
+    const expected = Buffer.from(String(expectedToken || '').trim().toUpperCase());
+    return provided.length === expected.length
+        && provided.length > 0
+        && crypto.timingSafeEqual(provided, expected);
+}
+
+function getPublicCookieSyncStatus() {
+    return {
+        running: Boolean(cookieSyncServer),
+        port: cookieSyncServerPort || config.cookie_sync_port || COOKIE_SYNC_PORT,
+        paired: Boolean(config.cookie_sync_paired_at)
+    };
+}
+
+function writeJson(req, res, statusCode, payload) {
+    const headers = {
         'Content-Type': 'application/json; charset=utf-8',
-        'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
         'Access-Control-Allow-Headers': 'Content-Type'
-    });
+    };
+    const origin = req.headers.origin || '';
+    if (origin && isAllowedCookieSyncOrigin(origin)) {
+        headers['Access-Control-Allow-Origin'] = origin;
+        headers.Vary = 'Origin';
+    }
+    res.writeHead(statusCode, headers);
     res.end(JSON.stringify(payload));
 }
 
 function createCookieSyncServer() {
     return http.createServer(async (req, res) => {
         if (!req.url) {
-            writeJson(res, 400, { success: false, message: '无效请求' });
+            writeJson(req, res, 400, { success: false, message: '无效请求' });
+            return;
+        }
+
+        if (!isAllowedCookieSyncOrigin(req.headers.origin || '')) {
+            writeJson(req, res, 403, { success: false, message: '不允许的请求来源' });
             return;
         }
 
         if (req.method === 'OPTIONS') {
-            writeJson(res, 204, {});
+            writeJson(req, res, 204, {});
             return;
         }
 
         const urlObj = new URL(req.url, `http://127.0.0.1:${config.cookie_sync_port || COOKIE_SYNC_PORT}`);
 
         if (req.method === 'GET' && urlObj.pathname === '/api/cookie-sync/status') {
-            writeJson(res, 200, { success: true, ...getCookieSyncStatus() });
+            writeJson(req, res, 200, { success: true, ...getPublicCookieSyncStatus() });
             return;
         }
 
         if (req.method !== 'POST') {
-            writeJson(res, 405, { success: false, message: '方法不支持' });
+            writeJson(req, res, 405, { success: false, message: '方法不支持' });
             return;
         }
 
@@ -468,8 +502,8 @@ function createCookieSyncServer() {
             const payload = await readRequestBody(req);
             const expectedToken = config.cookie_sync_token;
 
-            if (payload.token !== expectedToken) {
-                writeJson(res, 401, { success: false, message: '配对码错误' });
+            if (!cookieSyncTokensMatch(payload.token, expectedToken)) {
+                writeJson(req, res, 401, { success: false, message: '配对码错误' });
                 return;
             }
 
@@ -480,7 +514,7 @@ function createCookieSyncServer() {
                 saveConfig(config);
                 log('INFO', `[Cookie Sync] 浏览器插件已配对: ${config.cookie_sync_browser || '未知浏览器'}`);
                 sendCookieSyncUpdate();
-                writeJson(res, 200, {
+                writeJson(req, res, 200, {
                     success: true,
                     message: '配对成功',
                     sites: COOKIE_SYNC_SITES,
@@ -494,7 +528,7 @@ function createCookieSyncServer() {
             if (urlObj.pathname === '/api/cookie-sync/sync') {
                 config.cookie_sync_browser = payload.browserName || config.cookie_sync_browser || '';
                 const result = saveSyncedCookies(payload.cookies, 'local-api');
-                writeJson(res, 200, {
+                writeJson(req, res, 200, {
                     success: true,
                     message: '同步成功',
                     cookieCount: result.cookieCount,
@@ -506,10 +540,10 @@ function createCookieSyncServer() {
                 return;
             }
 
-            writeJson(res, 404, { success: false, message: '接口不存在' });
+            writeJson(req, res, 404, { success: false, message: '接口不存在' });
         } catch (error) {
             log('ERROR', `[Cookie Sync] 请求处理失败: ${error.message}`);
-            writeJson(res, 500, { success: false, message: error.message });
+            writeJson(req, res, 500, { success: false, message: error.message });
         }
     });
 }
@@ -631,6 +665,83 @@ function saveTasks(tasks) {
     } catch (e) {
         log('ERROR', '保存任务失败: ' + e.message);
     }
+}
+
+function isPathInside(rootPath, candidatePath) {
+    const relativePath = path.relative(path.resolve(rootPath), path.resolve(candidatePath));
+    return relativePath !== ''
+        && !relativePath.startsWith(`..${path.sep}`)
+        && relativePath !== '..'
+        && !path.isAbsolute(relativePath);
+}
+
+function getTrackedOutputRecords(task) {
+    const records = [];
+    const appendRecords = (item, fallbackOutputDir = '') => {
+        if (!item) return;
+        const outputDir = item.output_dir || fallbackOutputDir;
+        const outputFiles = Array.isArray(item.output_files) ? item.output_files : [];
+        outputFiles.forEach((filePath) => {
+            if (outputDir && filePath) {
+                records.push({ outputDir, filePath });
+            }
+        });
+    };
+
+    appendRecords(task);
+    (Array.isArray(task?.entries) ? task.entries : []).forEach((entry) => {
+        appendRecords(entry, task.output_dir || '');
+    });
+    return records;
+}
+
+function deleteTrackedOutputFiles(task) {
+    const result = { deletedFiles: 0, missingFiles: 0, skippedFiles: 0 };
+    const records = getTrackedOutputRecords(task);
+    const seen = new Set();
+
+    records.forEach(({ outputDir, filePath }) => {
+        const resolvedOutputDir = path.resolve(outputDir);
+        const resolvedFilePath = path.resolve(filePath);
+        const pathKey = resolvedFilePath.toLowerCase();
+
+        if (seen.has(pathKey)) return;
+        seen.add(pathKey);
+
+        if (!isPathInside(resolvedOutputDir, resolvedFilePath)) {
+            result.skippedFiles += 1;
+            log('WARN', `[Delete] 跳过下载目录外的文件: ${resolvedFilePath}`);
+            return;
+        }
+
+        if (!fs.existsSync(resolvedFilePath)) {
+            result.missingFiles += 1;
+            return;
+        }
+
+        try {
+            const stat = fs.lstatSync(resolvedFilePath);
+            if (!stat.isFile() && !stat.isSymbolicLink()) {
+                result.skippedFiles += 1;
+                log('WARN', `[Delete] 跳过非文件路径: ${resolvedFilePath}`);
+                return;
+            }
+
+            fs.unlinkSync(resolvedFilePath);
+            result.deletedFiles += 1;
+            log('INFO', `[Delete] 已删除文件: ${resolvedFilePath}`);
+        } catch (error) {
+            result.skippedFiles += 1;
+            log('WARN', `[Delete] 删除文件失败: ${resolvedFilePath} - ${error.message}`);
+        }
+    });
+
+    if (records.length === 0) {
+        result.skippedFiles += 1;
+        log('WARN', `[Delete] 任务 ${task?.task_id || 'unknown'} 没有精确文件路径，仅删除记录`);
+    }
+
+    return result;
 }
 
 // ==================== 窗口创建 ====================
@@ -905,71 +1016,48 @@ ipcMain.handle('get-completed-tasks', () => completedTasks);
 
 // 清空已完成任务（支持同时删除文件）
 ipcMain.handle('clear-completed-tasks', (event, deleteFiles = false) => {
+    const deleteResult = { deletedFiles: 0, missingFiles: 0, skippedFiles: 0 };
+
     if (deleteFiles) {
-        // 尝试删除所有已完成任务的文件
-        const outputDir = config.output_dir;
-        try {
-            const files = fs.readdirSync(outputDir);
-            completedTasks.forEach(task => {
-                const titleClean = task.title.replace(/[<>:"/\\|?*]/g, '');
-                files.forEach(file => {
-                    if (file.includes(titleClean) || file.startsWith(titleClean.substring(0, 30))) {
-                        const filePath = path.join(outputDir, file);
-                        try {
-                            fs.unlinkSync(filePath);
-                            log('INFO', `[Delete] 已删除文件: ${filePath}`);
-                        } catch (e) {
-                            log('WARN', `[Delete] 删除文件失败: ${filePath} - ${e.message}`);
-                        }
-                    }
-                });
-            });
-        } catch (e) {
-            log('ERROR', `[Delete] 清空文件时出错: ${e.message}`);
-        }
+        completedTasks.forEach((task) => {
+            const taskResult = deleteTrackedOutputFiles(task);
+            deleteResult.deletedFiles += taskResult.deletedFiles;
+            deleteResult.missingFiles += taskResult.missingFiles;
+            deleteResult.skippedFiles += taskResult.skippedFiles;
+        });
     }
 
     completedTasks = [];
     saveTasks([]);
-    return { success: true };
+    return { success: true, ...deleteResult };
 });
 
 // 删除单个已完成任务（支持同时删除文件）
 ipcMain.handle('delete-completed-task', (event, taskId, deleteFiles = false) => {
     const task = completedTasks.find(t => t.task_id === taskId);
+    let deleteResult = { deletedFiles: 0, missingFiles: 0, skippedFiles: 0 };
 
     if (deleteFiles && task) {
-        // 尝试删除下载的文件
-        try {
-            const outputDir = config.output_dir;
-            const files = fs.readdirSync(outputDir);
-            // 匹配包含任务标题的文件
-            const titleClean = task.title.replace(/[<>:"/\\|?*]/g, ''); // 去除非法字符
-            files.forEach(file => {
-                if (file.includes(titleClean) || file.startsWith(titleClean.substring(0, 30))) {
-                    const filePath = path.join(outputDir, file);
-                    try {
-                        fs.unlinkSync(filePath);
-                        log('INFO', `[Delete] 已删除文件: ${filePath}`);
-                    } catch (e) {
-                        log('WARN', `[Delete] 删除文件失败: ${filePath} - ${e.message}`);
-                    }
-                }
-            });
-        } catch (e) {
-            log('ERROR', `[Delete] 删除文件时出错: ${e.message}`);
-        }
+        deleteResult = deleteTrackedOutputFiles(task);
     }
 
     completedTasks = completedTasks.filter(t => t.task_id !== taskId);
     saveTasks(completedTasks);
-    return { success: true };
+    return { success: true, ...deleteResult };
 });
 
 // 打开外部链接
 ipcMain.handle('open-external', async (event, url) => {
-    require('electron').shell.openExternal(url);
-    return { success: true };
+    try {
+        const parsedUrl = new URL(String(url || ''));
+        if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+            return { success: false, message: '仅允许打开 HTTP/HTTPS 链接' };
+        }
+        await shell.openExternal(parsedUrl.toString());
+        return { success: true };
+    } catch (error) {
+        return { success: false, message: '无效的外部链接' };
+    }
 });
 
 // 从剪贴板粘贴
@@ -1022,12 +1110,15 @@ ipcMain.handle('start-download', async (event, url) => {
     let trimmedUrl = url.trim();
     try {
         const urlObj = new URL(trimmedUrl);
+        if (!['http:', 'https:'].includes(urlObj.protocol)) {
+            return { success: false, error: '仅支持 HTTP/HTTPS 视频链接' };
+        }
         urlObj.hostname = urlObj.hostname.toLowerCase();
         // 移除常见的追踪参数
         ['utm_source', 'utm_medium', 'utm_campaign', 'ref', 'tracking_source'].forEach(p => urlObj.searchParams.delete(p));
         trimmedUrl = urlObj.toString().replace(/\/$/, ''); // 移除尾部斜杠
     } catch (e) {
-        // URL 解析失败，保持原样
+        return { success: false, error: '请输入有效的视频链接' };
     }
 
     log('INFO', `[start-download] 检查 URL: ${trimmedUrl}`);
@@ -1099,41 +1190,39 @@ ipcMain.handle('select-format-and-download', (event, taskId, formatId) => {
 ipcMain.handle('cancel-task', async (event, taskId) => {
     const task = activeTasks[taskId];
     if (task) {
+        if (!task._process && ['waiting', 'failed'].includes(task.status)) {
+            delete activeTasks[taskId];
+            log('INFO', `[Cancel] 已移除任务 ${taskId}`);
+            return { success: true, removed: true };
+        }
+
         task._cancelRequested = true;
         task.status = 'cancelled';
         const pid = task._process?.pid;
+        task._cancelledProcessPid = pid || 0;
+        task._parseRequestId = (task._parseRequestId || 0) + 1;
         log('INFO', `[Cancel] 请求取消任务 ${taskId}, pid=${pid || 'unknown'}`);
+        let terminationResult = { success: true, message: '' };
         if (task._process) {
-            try {
-                task._process.kill('SIGTERM');
-                if (task._process.pid) {
-                    const killResult = spawnSync('taskkill', ['/PID', String(task._process.pid), '/T', '/F'], { windowsHide: true, encoding: 'utf8' });
-                    if (killResult.stdout) log('INFO', `[Cancel] taskkill stdout: ${killResult.stdout.trim()}`);
-                    if (killResult.stderr) log('INFO', `[Cancel] taskkill stderr: ${killResult.stderr.trim()}`);
-                }
-                spawnSync('taskkill', ['/F', '/IM', 'yt-dlp.exe'], { windowsHide: true, encoding: 'utf8' });
-                spawnSync('taskkill', ['/F', '/IM', 'ffmpeg.exe'], { windowsHide: true, encoding: 'utf8' });
-            } catch (error) {
-                log('WARN', `[Cancel] 终止进程失败: ${error.message}`);
-            }
+            terminationResult = terminateProcessTree(task._process, 'Cancel');
         }
 
         sendTaskUpdate(task);
 
         await delay(1200);
-        if (isPidRunning(pid)) {
+        if (!terminationResult.success || isPidRunning(pid)) {
             task.status = 'failed';
-            task.error_message = '取消失败：后台进程仍在运行';
+            task.error_message = `取消失败：${terminationResult.message || '后台进程仍在运行'}`;
             task._cancelRequested = false;
-            log('ERROR', `[Cancel] 任务 ${taskId} 取消失败，pid=${pid} 仍在运行`);
+            log('ERROR', `[Cancel] 任务 ${taskId} 取消失败: ${task.error_message}`);
             sendTaskUpdate(task);
-            return { success: false, error: '取消失败：后台进程仍在运行' };
+            return { success: false, error: task.error_message };
         }
 
         if (!task.formats || task.formats.length === 0) {
             delete activeTasks[taskId];
             log('INFO', `[Cancel] 解析任务 ${taskId} 已移除`);
-            return { success: true };
+            return { success: true, removed: true };
         }
 
         cleanupCancelledArtifacts(task);
@@ -1144,9 +1233,17 @@ ipcMain.handle('cancel-task', async (event, taskId) => {
         task.eta = '';
         task.error_message = '';
         task.status = 'waiting';
+        (Array.isArray(task.entries) ? task.entries : []).forEach((entry) => {
+            if (entry.status === 'downloading') {
+                entry.status = 'waiting';
+                entry.progress = 0;
+                entry.speed = '';
+                entry.eta = '';
+            }
+        });
         log('INFO', `[Cancel] 任务 ${taskId} 已成功取消`);
         sendTaskUpdate(task);
-        return { success: true };
+        return { success: true, status: 'waiting' };
     }
     return { success: false, error: '任务不存在' };
 });
@@ -1220,11 +1317,17 @@ ipcMain.handle('download-image', async (event, url) => {
         return null;
     }
 
-    log('INFO', `图片代理: 开始下载 ${url}`);
-
     return new Promise((resolve) => {
+        let settled = false;
+        let timeout = null;
+        const finish = (value) => {
+            if (settled) return;
+            settled = true;
+            if (timeout) clearTimeout(timeout);
+            resolve(value);
+        };
+
         try {
-            // 处理 URL
             let processedUrl = url;
             if (processedUrl.startsWith('//')) {
                 processedUrl = 'https:' + processedUrl;
@@ -1232,46 +1335,100 @@ ipcMain.handle('download-image', async (event, url) => {
                 processedUrl = processedUrl.replace('http://', 'https://');
             }
 
-            log('INFO', `图片代理: 处理后 URL = ${processedUrl}`);
+            const parsedUrl = new URL(processedUrl);
+            if (!isSafeProxyImageUrl(parsedUrl)) {
+                log('WARN', `图片代理: 拒绝不安全地址 ${parsedUrl.hostname}`);
+                finish(null);
+                return;
+            }
 
             const request = net.request(processedUrl);
             request.setHeader('Referer', getImageReferer(processedUrl));
             request.setHeader('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+            timeout = setTimeout(() => {
+                log('WARN', `图片代理: 请求超时 ${parsedUrl.hostname}`);
+                request.abort();
+                finish(null);
+            }, PROXY_IMAGE_TIMEOUT_MS);
 
             request.on('response', (response) => {
-                log('INFO', `图片代理: 响应状态 ${response.statusCode}`);
+                const contentTypeHeader = response.headers['content-type'];
+                const contentType = Array.isArray(contentTypeHeader) ? contentTypeHeader[0] : (contentTypeHeader || '');
+                const contentLengthHeader = response.headers['content-length'];
+                const contentLength = Number(Array.isArray(contentLengthHeader) ? contentLengthHeader[0] : contentLengthHeader);
+
+                if (response.statusCode !== 200 || !String(contentType).toLowerCase().startsWith('image/')) {
+                    log('WARN', `图片代理: 响应无效 ${response.statusCode} ${parsedUrl.hostname}`);
+                    request.abort();
+                    finish(null);
+                    return;
+                }
+                if (Number.isFinite(contentLength) && contentLength > MAX_PROXY_IMAGE_BYTES) {
+                    log('WARN', `图片代理: 图片超过大小限制 ${contentLength} 字节`);
+                    request.abort();
+                    finish(null);
+                    return;
+                }
+
                 const chunks = [];
-                response.on('data', (chunk) => chunks.push(chunk));
-                response.on('end', () => {
-                    if (response.statusCode === 200) {
-                        const buffer = Buffer.concat(chunks);
-                        log('INFO', `图片代理: 成功下载 ${buffer.length} 字节`);
-                        const base64 = buffer.toString('base64');
-                        let mimeType = 'image/jpeg';
-                        const contentType = response.headers['content-type'];
-                        if (contentType) {
-                            mimeType = Array.isArray(contentType) ? contentType[0] : contentType;
-                        }
-                        resolve(`data:${mimeType};base64,${base64}`);
-                    } else {
-                        log('WARN', `图片代理: 下载失败 ${response.statusCode} - ${processedUrl}`);
-                        resolve(null);
+                let totalBytes = 0;
+                response.on('data', (chunk) => {
+                    if (settled) return;
+                    totalBytes += chunk.length;
+                    if (totalBytes > MAX_PROXY_IMAGE_BYTES) {
+                        log('WARN', `图片代理: 图片超过大小限制 ${totalBytes} 字节`);
+                        request.abort();
+                        finish(null);
+                        return;
                     }
+                    chunks.push(chunk);
+                });
+                response.on('end', () => {
+                    if (settled) return;
+                    const buffer = Buffer.concat(chunks);
+                    log('INFO', `图片代理: 成功下载 ${buffer.length} 字节`);
+                    finish(`data:${contentType};base64,${buffer.toString('base64')}`);
                 });
             });
 
             request.on('error', (error) => {
                 log('ERROR', `图片代理: 网络错误 - ${error.message}`);
-                resolve(null);
+                finish(null);
             });
 
             request.end();
         } catch (e) {
             log('ERROR', `图片代理: 异常 - ${e.message}`);
-            resolve(null);
+            finish(null);
         }
     });
 });
+
+function isSafeProxyImageUrl(parsedUrl) {
+    if (!parsedUrl || parsedUrl.protocol !== 'https:') return false;
+
+    const hostname = parsedUrl.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+    if (hostname === 'localhost' || hostname.endsWith('.localhost')) return false;
+
+    const ipVersion = nodeNet.isIP(hostname);
+    if (ipVersion === 4) {
+        const octets = hostname.split('.').map(Number);
+        return !(octets[0] === 10
+            || octets[0] === 127
+            || octets[0] === 0
+            || (octets[0] === 169 && octets[1] === 254)
+            || (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31)
+            || (octets[0] === 192 && octets[1] === 168));
+    }
+    if (ipVersion === 6) {
+        return hostname !== '::1'
+            && !hostname.startsWith('fc')
+            && !hostname.startsWith('fd')
+            && !hostname.startsWith('fe80:');
+    }
+
+    return true;
+}
 
 function getImageReferer(imageUrl) {
     try {
@@ -1328,7 +1485,7 @@ function normalizeYtdlpErrorMessage(message, task) {
     return rawMessage;
 }
 
-function parseFormats(task) {
+function parseFormats(task, attempt = 1) {
     if (!task || task._cancelRequested) return;
 
     task._parseRequestId = (task._parseRequestId || 0) + 1;
@@ -1375,7 +1532,7 @@ function parseFormats(task) {
                 log('WARN', '[parseFormats] Vimeo 解析遇到 503，1200ms 后自动重试一次');
                 await delay(1200);
                 if (activeTasks[task.task_id] && !task._cancelRequested && task._parseRequestId === currentParseRequestId) {
-                    parseFormats(task);
+                    parseFormats(task, attempt + 1);
                 }
                 return;
             }
@@ -1441,14 +1598,7 @@ function parseFormats(task) {
         }
 
         log('WARN', `[parseFormats] 解析超时: ${task.task_id}`);
-        try {
-            child.kill('SIGTERM');
-            if (child.pid) {
-                spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, encoding: 'utf8' });
-            }
-        } catch (timeoutError) {
-            log('WARN', `[parseFormats] 超时终止进程失败: ${timeoutError.message}`);
-        }
+        terminateProcessTree(child, 'Parse Timeout');
 
         if (activeTasks[task.task_id] && !task._cancelRequested && task._parseRequestId === currentParseRequestId) {
             task.status = 'failed';
@@ -1629,11 +1779,178 @@ function delay(ms) {
 
 function isPidRunning(pid) {
     if (!pid) return false;
+    if (process.platform !== 'win32') {
+        try {
+            process.kill(pid, 0);
+            return true;
+        } catch (error) {
+            return false;
+        }
+    }
+
     const result = spawnSync('tasklist', ['/FI', `PID eq ${pid}`], {
         windowsHide: true,
         encoding: 'utf8'
     });
     return (result.stdout || '').includes(String(pid));
+}
+
+function getWindowsDescendantPids(rootPid) {
+    if (process.platform !== 'win32' || !rootPid) return [];
+
+    const script = [
+        `$rootProcessId = ${Number(rootPid)}`,
+        '$all = Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId',
+        '$queue = [System.Collections.Generic.Queue[int]]::new()',
+        '$queue.Enqueue($rootProcessId)',
+        '$result = [System.Collections.Generic.List[int]]::new()',
+        'while ($queue.Count -gt 0) {',
+        '  $current = $queue.Dequeue()',
+        '  foreach ($child in $all | Where-Object { $_.ParentProcessId -eq $current }) {',
+        '    $childId = [int]$child.ProcessId',
+        '    $result.Add($childId)',
+        '    $queue.Enqueue($childId)',
+        '  }',
+        '}',
+        '$result | ForEach-Object { Write-Output $_ }'
+    ].join('\n');
+
+    const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+        windowsHide: true,
+        encoding: 'utf8',
+        timeout: 10000
+    });
+    if (result.error) {
+        log('WARN', `[Process] 无法枚举子进程: ${result.error.message}`);
+        return [];
+    }
+
+    return (result.stdout || '')
+        .split(/\r?\n/)
+        .map(line => parseInt(line.trim(), 10))
+        .filter(pid => Number.isInteger(pid) && pid > 0 && pid !== rootPid);
+}
+
+function terminateProcessTree(child, contextLabel = 'Process') {
+    const pid = child?.pid;
+    let descendantPids = [];
+    if (!pid) {
+        return { success: true, pid: 0, message: '进程已退出' };
+    }
+
+    try {
+        if (process.platform === 'win32') {
+            descendantPids = getWindowsDescendantPids(pid);
+            // 必须先按 PID 杀进程树，不能先终止父进程，否则 ffmpeg 可能变成孤儿进程。
+            const result = spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], {
+                windowsHide: true,
+                encoding: 'utf8',
+                timeout: 10000
+            });
+            const stdout = (result.stdout || '').trim();
+            const stderr = (result.stderr || '').trim();
+            if (stdout) log('INFO', `[${contextLabel}] taskkill: ${stdout}`);
+            if (stderr && isPidRunning(pid)) log('WARN', `[${contextLabel}] taskkill: ${stderr}`);
+
+            // 某些启动方式会让后代进程在父进程退出后脱离进程树，因此再按取消前记录的 PID 清理。
+            [...descendantPids].reverse().forEach((descendantPid) => {
+                if (!isPidRunning(descendantPid)) return;
+                spawnSync('taskkill', ['/PID', String(descendantPid), '/T', '/F'], {
+                    windowsHide: true,
+                    encoding: 'utf8',
+                    timeout: 10000
+                });
+            });
+
+            const remainingPids = [pid, ...descendantPids].filter(isPidRunning);
+            if (remainingPids.length === 0) {
+                return { success: true, pid };
+            }
+            log('WARN', `[${contextLabel}] 仍有进程未退出: ${remainingPids.join(', ')}`);
+        } else {
+            child.kill('SIGTERM');
+            if (!isPidRunning(pid)) {
+                return { success: true, pid };
+            }
+            child.kill('SIGKILL');
+        }
+    } catch (error) {
+        log('WARN', `[${contextLabel}] 终止进程树失败: ${error.message}`);
+    }
+
+    try {
+        if (isPidRunning(pid)) {
+            child.kill('SIGKILL');
+        }
+        if (process.platform === 'win32') {
+            [...descendantPids].reverse().forEach((descendantPid) => {
+                if (isPidRunning(descendantPid)) {
+                    spawnSync('taskkill', ['/PID', String(descendantPid), '/T', '/F'], {
+                        windowsHide: true,
+                        encoding: 'utf8',
+                        timeout: 10000
+                    });
+                }
+            });
+        }
+    } catch (error) {
+        log('WARN', `[${contextLabel}] 最终终止失败: ${error.message}`);
+    }
+
+    const remainingPids = [pid, ...descendantPids].filter(isPidRunning);
+    return {
+        success: remainingPids.length === 0,
+        pid,
+        message: remainingPids.length > 0 ? `后台进程仍在运行: ${remainingPids.join(', ')}` : ''
+    };
+}
+
+function createYtdlpOutputParser(target, onLine) {
+    let buffer = '';
+
+    const processLine = (line) => {
+        const markerIndex = line.indexOf(YTDLP_OUTPUT_MARKER);
+        if (markerIndex >= 0) {
+            const outputPath = line.slice(markerIndex + YTDLP_OUTPUT_MARKER.length).trim();
+            recordTaskOutputFile(target, outputPath);
+            return;
+        }
+        onLine(line);
+    };
+
+    return {
+        push(text) {
+            buffer += text;
+            const lines = buffer.split(/[\r\n]+/);
+            buffer = lines.pop() || '';
+            lines.forEach(processLine);
+        },
+        flush() {
+            if (buffer) {
+                processLine(buffer);
+                buffer = '';
+            }
+        }
+    };
+}
+
+function recordTaskOutputFile(target, filePath) {
+    if (!target || !filePath) return;
+
+    const outputDir = path.resolve(target.output_dir || config.output_dir);
+    const resolvedFilePath = path.resolve(filePath);
+    if (!isPathInside(outputDir, resolvedFilePath)) {
+        log('WARN', `[Download] 忽略下载目录外的输出路径: ${resolvedFilePath}`);
+        return;
+    }
+
+    if (!Array.isArray(target.output_files)) {
+        target.output_files = [];
+    }
+    if (!target.output_files.includes(resolvedFilePath)) {
+        target.output_files.push(resolvedFilePath);
+        log('INFO', `[Download] 已记录输出文件: ${resolvedFilePath}`);
+    }
 }
 
 function cleanupCancelledArtifacts(task) {
@@ -1714,6 +2031,10 @@ function downloadVideo(task) {
         '--no-playlist',
         '--no-cache-dir',
         '--no-update',
+        '--no-simulate',
+        '--progress',
+        '--newline',
+        '--print', `after_move:${YTDLP_OUTPUT_MARKER}%(filepath)s`,
         task.url
     ];
     if (preferredContainer === 'mp4') {
@@ -1724,6 +2045,8 @@ function downloadVideo(task) {
     appendPreferredJsRuntime(args);
 
     task.startTime = Date.now();
+    task.output_dir = path.resolve(config.output_dir);
+    task.output_files = [];
 
     // Cookie logic
     const activeCookieFile = resolveActiveCookieFile();
@@ -1733,14 +2056,13 @@ function downloadVideo(task) {
         args.push('--cookies', activeCookieFile);
     }
 
-    const proc = spawn(getYtdlpExePath(), args, { env: getChildProcessEnv() });
+    const proc = spawn(getYtdlpExePath(), args, { env: getChildProcessEnv(), windowsHide: true });
     task._process = proc;
     task._cancelRequested = false;
+    task._cancelledProcessPid = 0;
     let stderrOutput = '';
 
-    proc.stdout.on('data', (data) => {
-        const line = data.toString();
-
+    const outputParser = createYtdlpOutputParser(task, (line) => {
         // 解析进度, 速度, ETA
         // [download]  23.5% of 10.00MiB at 2.50MiB/s ETA 00:05
         const match = line.match(/\[download\]\s+([\d.]+)%/);
@@ -1762,6 +2084,9 @@ function downloadVideo(task) {
             sendTaskUpdate(task);
         }
     });
+    proc.stdout.on('data', (data) => {
+        outputParser.push(data.toString());
+    });
 
     proc.stderr.on('data', (data) => {
         const text = data.toString();
@@ -1770,8 +2095,12 @@ function downloadVideo(task) {
     });
 
     proc.on('close', (code) => {
-        if (task._cancelRequested || task.status === 'cancelled') {
-            delete activeTasks[task.task_id];
+        outputParser.flush();
+        if (task._process === proc) {
+            task._process = null;
+        }
+
+        if (task._cancelRequested || task.status === 'cancelled' || task._cancelledProcessPid === proc.pid) {
             return;
         }
 
@@ -1798,7 +2127,9 @@ function downloadVideo(task) {
                 format_summary: task.format_summary,
                 totalSize: task.totalSize,
                 duration: task.duration,
-                finishTime: task.finishTime
+                finishTime: task.finishTime,
+                output_dir: task.output_dir,
+                output_files: task.output_files
             });
             saveTasks(completedTasks);
         } else if (task.status !== 'cancelled') {
@@ -1816,6 +2147,7 @@ function downloadVideo(task) {
 // Behance 多视频下载
 function downloadBehanceVideos(task) {
     const selectedEntries = task.entries.filter(e => e.selected);
+    task.output_dir = path.resolve(config.output_dir);
     if (selectedEntries.length === 0) {
         task.status = 'completed';
         task.finishTime = new Date().toISOString();
@@ -1851,6 +2183,7 @@ function downloadBehanceVideos(task) {
                 finishTime: task.finishTime,
                 isBehance: true,
                 videoCount: selectedEntries.length,
+                output_dir: task.output_dir,
                 entries: selectedEntries.map(e => ({
                     id: e.id,
                     title: e.title,
@@ -1858,7 +2191,9 @@ function downloadBehanceVideos(task) {
                     status: e.status,
                     totalSize: e.totalSize,
                     duration: e.duration,
-                    finishTime: e.finishTime
+                    finishTime: e.finishTime,
+                    output_dir: e.output_dir,
+                    output_files: e.output_files
                 }))
             });
             saveTasks(completedTasks);
@@ -1886,7 +2221,9 @@ function downloadBehanceVideos(task) {
             formatStr = `${formatStr}+bestaudio/best`;
         }
 
-    const outputTemplate = createUniqueOutputTemplate(`${entry.title}_${currentIndex + 1}`, 'mp4');
+        const outputTemplate = createUniqueOutputTemplate(`${entry.title}_${currentIndex + 1}`, 'mp4');
+        entry.output_dir = path.resolve(config.output_dir);
+        entry.output_files = [];
         const args = [
             '-f', formatStr,
             '-o', outputTemplate,
@@ -1894,6 +2231,10 @@ function downloadBehanceVideos(task) {
             '--embed-thumbnail',
             '--no-cache-dir',
             '--no-update',
+            '--no-simulate',
+            '--progress',
+            '--newline',
+            '--print', `after_move:${YTDLP_OUTPUT_MARKER}%(filepath)s`,
             entry.url
         ];
         args.splice(args.length - 1, 0, '--recode-video', 'mp4');
@@ -1904,13 +2245,13 @@ function downloadBehanceVideos(task) {
             args.push('--cookies', activeCookieFile);
         }
 
-        const proc = spawn(getYtdlpExePath(), args, { env: getChildProcessEnv() });
+        const proc = spawn(getYtdlpExePath(), args, { env: getChildProcessEnv(), windowsHide: true });
         task._process = proc;
         task._cancelRequested = false;
+        task._cancelledProcessPid = 0;
         let stderrOutput = '';
 
-        proc.stdout.on('data', (data) => {
-            const line = data.toString();
+        const outputParser = createYtdlpOutputParser(entry, (line) => {
             // 解析进度、速度、ETA
             // [download]  23.5% of 10.00MiB at 2.50MiB/s ETA 00:05
             const progressMatch = line.match(/(\d+\.?\d*)%/);
@@ -1938,6 +2279,9 @@ function downloadBehanceVideos(task) {
                 sendTaskUpdate(task);
             }
         });
+        proc.stdout.on('data', (data) => {
+            outputParser.push(data.toString());
+        });
 
         proc.stderr.on('data', (data) => {
             const line = data.toString();
@@ -1948,8 +2292,12 @@ function downloadBehanceVideos(task) {
         });
 
         proc.on('close', (code) => {
-            if (task._cancelRequested || task.status === 'cancelled') {
-                delete activeTasks[task.task_id];
+            outputParser.flush();
+            if (task._process === proc) {
+                task._process = null;
+            }
+
+            if (task._cancelRequested || task.status === 'cancelled' || task._cancelledProcessPid === proc.pid) {
                 return;
             }
 
