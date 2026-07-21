@@ -12,6 +12,13 @@ const nodeNet = require('net');
 const crypto = require('crypto');
 const { spawn, execFile, spawnSync } = require('child_process');
 const packageJson = require('./package.json');
+const {
+    USER_AGENT: ART_LIST_USER_AGENT,
+    isArtlistUrl,
+    parseArtlistPage,
+    guessArtlistExtension,
+    isSafeArtlistAudioUrl
+} = require('./lib/artlist');
 
 // 应用目录
 const APP_DIR = app.isPackaged
@@ -1005,13 +1012,7 @@ ipcMain.handle('activate-plugin-cookie-source', () => {
 
 // 获取任务列表
 // 获取任务列表
-ipcMain.handle('get-tasks', () => {
-    return Object.values(activeTasks).map(task => {
-        const safeTask = { ...task };
-        delete safeTask._process;
-        return safeTask;
-    });
-});
+ipcMain.handle('get-tasks', () => Object.values(activeTasks).map(createTaskSnapshot));
 ipcMain.handle('get-completed-tasks', () => completedTasks);
 
 // 清空已完成任务（支持同时删除文件）
@@ -1206,6 +1207,12 @@ ipcMain.handle('cancel-task', async (event, taskId) => {
         if (task._process) {
             terminationResult = terminateProcessTree(task._process, 'Cancel');
         }
+        if (task._request) {
+            task._request.abort();
+        }
+        if (task._downloadStream) {
+            task._downloadStream.destroy();
+        }
 
         sendTaskUpdate(task);
 
@@ -1228,6 +1235,8 @@ ipcMain.handle('cancel-task', async (event, taskId) => {
         cleanupCancelledArtifacts(task);
         task._cancelRequested = false;
         task._process = null;
+        task._request = null;
+        task._downloadStream = null;
         task.progress = 0;
         task.speed = '';
         task.eta = '';
@@ -1452,11 +1461,18 @@ function getImageReferer(imageUrl) {
 
 function sendTaskUpdate(task) {
     if (mainWindow && !mainWindow.isDestroyed()) {
-        // 创建副本并移除不可序列化的 _process 属性
-        const safeTask = { ...task };
-        delete safeTask._process;
-        mainWindow.webContents.send('task-update', safeTask);
+        mainWindow.webContents.send('task-update', createTaskSnapshot(task));
     }
+}
+
+function createTaskSnapshot(task) {
+    const snapshot = { ...task };
+    delete snapshot._process;
+    delete snapshot._request;
+    delete snapshot._downloadStream;
+    delete snapshot._artlistAudioUrl;
+    delete snapshot._tempFile;
+    return snapshot;
 }
 
 function normalizeYtdlpErrorMessage(message, task) {
@@ -1485,8 +1501,109 @@ function normalizeYtdlpErrorMessage(message, task) {
     return rawMessage;
 }
 
+function requestArtlistPage(task) {
+    return new Promise((resolve, reject) => {
+        let settled = false;
+        let timer = null;
+        const chunks = [];
+        let totalBytes = 0;
+        const request = net.request({ method: 'GET', url: task.url });
+        task._request = request;
+
+        const finish = (error, value) => {
+            if (settled) return;
+            settled = true;
+            if (timer) clearTimeout(timer);
+            if (task._request === request) task._request = null;
+            if (error) reject(error);
+            else resolve(value);
+        };
+
+        request.setHeader('User-Agent', ART_LIST_USER_AGENT);
+        request.setHeader('Accept', 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8');
+        request.setHeader('Accept-Language', 'zh-CN,zh;q=0.9,en;q=0.8');
+        request.on('redirect', (statusCode, method, redirectUrl) => {
+            if (!isArtlistUrl(redirectUrl)) {
+                request.abort();
+                finish(new Error('Artlist 页面重定向到了不受支持的地址'));
+                return;
+            }
+            request.followRedirect();
+        });
+        request.on('response', (response) => {
+            if (response.statusCode < 200 || response.statusCode >= 300) {
+                request.abort();
+                finish(new Error(`Artlist 页面请求失败（HTTP ${response.statusCode}）`));
+                return;
+            }
+            response.on('data', (chunk) => {
+                totalBytes += chunk.length;
+                if (totalBytes > 20 * 1024 * 1024) {
+                    request.abort();
+                    finish(new Error('Artlist 页面超过大小限制'));
+                    return;
+                }
+                chunks.push(chunk);
+            });
+            response.on('end', () => finish(null, Buffer.concat(chunks).toString('utf8')));
+            response.on('error', (error) => finish(error));
+        });
+        request.on('error', (error) => finish(error));
+        timer = setTimeout(() => {
+            request.abort();
+            finish(new Error('Artlist 页面请求超时'));
+        }, 45000);
+        request.end();
+    });
+}
+
+async function parseArtlistTask(task) {
+    task._parseRequestId = (task._parseRequestId || 0) + 1;
+    const requestId = task._parseRequestId;
+    task._parseStartedAt = Date.now();
+    task.error_message = '';
+    log('INFO', `[parseArtlistTask] 开始解析: ${task.url}`);
+
+    try {
+        const parsed = isSafeArtlistAudioUrl(task.url)
+            ? { title: 'artlist_audio', artist: '', songId: '', audioUrl: task.url }
+            : parseArtlistPage(await requestArtlistPage(task), task.url);
+        if (!activeTasks[task.task_id] || task._cancelRequested || task._parseRequestId !== requestId) return;
+
+        task.isArtlist = true;
+        task.title = parsed.artist ? `${parsed.title} - ${parsed.artist}` : parsed.title;
+        task.artist = parsed.artist;
+        task.song_id = parsed.songId;
+        task._artlistAudioUrl = parsed.audioUrl;
+        task.formats = [{
+            format_id: 'artlist-preview',
+            resolution: 'Artlist 试听音频',
+            ext: guessArtlistExtension(parsed.audioUrl),
+            filesize: '自动',
+            hasAudio: true,
+            mp4Compatible: false
+        }];
+        task.status = 'waiting';
+        sendTaskUpdate(task);
+        log('INFO', `[parseArtlistTask] 解析成功: ${task.title} - ${task.artist}`);
+    } catch (error) {
+        if (!activeTasks[task.task_id] || task._cancelRequested) return;
+        task.status = 'failed';
+        task.error_message = error.message || 'Artlist 解析失败';
+        log('ERROR', `[parseArtlistTask] ${task.error_message}`);
+        sendTaskUpdate(task);
+    } finally {
+        if (task._request && task._parseRequestId === requestId) task._request = null;
+    }
+}
+
 function parseFormats(task, attempt = 1) {
     if (!task || task._cancelRequested) return;
+
+    if (isArtlistUrl(task.url)) {
+        parseArtlistTask(task);
+        return;
+    }
 
     task._parseRequestId = (task._parseRequestId || 0) + 1;
     task._parseStartedAt = Date.now();
@@ -2021,7 +2138,189 @@ function buildDownloadFormatSelector(task, preferredContainer) {
     return `${selectedFormatId}+bestaudio/best`;
 }
 
+function createUniqueArtlistOutputPath(task, extension) {
+    const artist = task.artist && !task.title.toLowerCase().includes(task.artist.toLowerCase())
+        ? ` - ${task.artist}`
+        : '';
+    const baseName = sanitizeFileBase(`${task.title}${artist}`).slice(0, 180);
+    let candidate = path.join(task.output_dir, `${baseName}.${extension}`);
+    let suffix = 1;
+    while (fs.existsSync(candidate) || fs.existsSync(`${candidate}.part`)) {
+        candidate = path.join(task.output_dir, `${baseName} (${suffix}).${extension}`);
+        suffix += 1;
+    }
+    return candidate;
+}
+
+function formatEta(seconds) {
+    if (!Number.isFinite(seconds) || seconds < 0) return '';
+    const rounded = Math.ceil(seconds);
+    const minutes = Math.floor(rounded / 60);
+    const remaining = rounded % 60;
+    return `${minutes.toString().padStart(2, '0')}:${remaining.toString().padStart(2, '0')}`;
+}
+
+function downloadArtlistAudio(task) {
+    if (!isSafeArtlistAudioUrl(task._artlistAudioUrl)) {
+        task.status = 'failed';
+        task.error_message = 'Artlist 音频地址无效或不受支持';
+        sendTaskUpdate(task);
+        return;
+    }
+
+    fs.mkdirSync(path.resolve(config.output_dir), { recursive: true });
+    task.output_dir = path.resolve(config.output_dir);
+    task.output_files = [];
+    task.startTime = Date.now();
+    task.progress = 0;
+    task.totalSize = '';
+
+    const request = net.request({ method: 'GET', url: task._artlistAudioUrl });
+    task._request = request;
+    let settled = false;
+    let timer = null;
+    let outputPath = '';
+    let tempPath = '';
+    let stream = null;
+    let receivedBytes = 0;
+    const startedAt = Date.now();
+
+    const cleanupTemp = () => {
+        if (!tempPath) return;
+        try {
+            if (fs.existsSync(tempPath)) fs.rmSync(tempPath, { force: true });
+        } catch (error) {
+            log('WARN', `[Artlist] 清理临时文件失败: ${error.message}`);
+        }
+    };
+
+    const finishError = (error) => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        if (stream) stream.destroy();
+        cleanupTemp();
+        if (task._request === request) task._request = null;
+        if (task._downloadStream === stream) task._downloadStream = null;
+        if (task._tempFile === tempPath) task._tempFile = null;
+        if (!task._cancelRequested) {
+            task.status = 'failed';
+            task.error_message = error.message || 'Artlist 音频下载失败';
+            sendTaskUpdate(task);
+        }
+    };
+
+    request.setHeader('User-Agent', ART_LIST_USER_AGENT);
+    request.setHeader('Referer', 'https://artlist.io/');
+    request.setHeader('Origin', 'https://artlist.io');
+    request.setHeader('Accept', '*/*');
+    request.on('redirect', (statusCode, method, redirectUrl) => {
+        if (!isSafeArtlistAudioUrl(redirectUrl)) {
+            request.abort();
+            finishError(new Error('Artlist 音频重定向到了不受支持的地址'));
+            return;
+        }
+        request.followRedirect();
+    });
+    request.on('response', (response) => {
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+            request.abort();
+            finishError(new Error(`Artlist 音频请求失败（HTTP ${response.statusCode}）`));
+            return;
+        }
+
+        const contentTypeHeader = response.headers['content-type'];
+        const contentType = Array.isArray(contentTypeHeader) ? contentTypeHeader[0] : (contentTypeHeader || '');
+        const contentLengthHeader = response.headers['content-length'];
+        const contentLength = Number(Array.isArray(contentLengthHeader) ? contentLengthHeader[0] : contentLengthHeader);
+        const extension = guessArtlistExtension(task._artlistAudioUrl, contentType);
+        outputPath = createUniqueArtlistOutputPath(task, extension);
+        tempPath = `${outputPath}.part`;
+        task._tempFile = tempPath;
+        task.totalSize = Number.isFinite(contentLength) && contentLength > 0 ? formatBytes(contentLength) : '';
+
+        try {
+            stream = fs.createWriteStream(tempPath);
+            task._downloadStream = stream;
+        } catch (error) {
+            finishError(error);
+            return;
+        }
+
+        response.on('data', (chunk) => {
+            if (settled || task._cancelRequested) return;
+            receivedBytes += chunk.length;
+            if (!stream.write(chunk)) response.pause();
+
+            if (contentLength > 0) task.progress = Math.min(99.9, receivedBytes / contentLength * 100);
+            const elapsedSeconds = Math.max((Date.now() - startedAt) / 1000, 0.1);
+            task.speed = `${formatBytes(receivedBytes / elapsedSeconds)}/s`;
+            if (contentLength > 0) task.eta = formatEta((contentLength - receivedBytes) / (receivedBytes / elapsedSeconds));
+            task.status = 'downloading';
+            sendTaskUpdate(task);
+        });
+        stream.on('drain', () => response.resume());
+        response.on('end', () => {
+            if (settled || task._cancelRequested) {
+                cleanupTemp();
+                return;
+            }
+            stream.end(() => {
+                try {
+                    fs.renameSync(tempPath, outputPath);
+                    recordTaskOutputFile(task, outputPath);
+                    settled = true;
+                    if (timer) clearTimeout(timer);
+                    if (task._request === request) task._request = null;
+                    if (task._downloadStream === stream) task._downloadStream = null;
+                    if (task._tempFile === tempPath) task._tempFile = null;
+                    task.progress = 100;
+                    task.status = 'completed';
+                    task.finishTime = Date.now();
+                    const durationMs = Date.now() - task.startTime;
+                    task.duration = `${Math.floor(durationMs / 60000).toString().padStart(2, '0')}:${Math.floor((durationMs % 60000) / 1000).toString().padStart(2, '0')}`;
+                    task.format_summary = `Artlist 试听音频 · ${extension.toUpperCase()}`;
+                    completedTasks.unshift({
+                        task_id: task.task_id,
+                        title: task.title,
+                        artist: task.artist,
+                        url: task.url,
+                        thumbnail: task.thumbnail,
+                        status: 'completed',
+                        isArtlist: true,
+                        format_id: task.format_id,
+                        format_summary: task.format_summary,
+                        totalSize: task.totalSize,
+                        duration: task.duration,
+                        finishTime: task.finishTime,
+                        output_dir: task.output_dir,
+                        output_files: task.output_files
+                    });
+                    saveTasks(completedTasks);
+                    delete activeTasks[task.task_id];
+                    sendTaskUpdate(task);
+                } catch (error) {
+                    finishError(error);
+                }
+            });
+        });
+        response.on('error', finishError);
+        stream.on('error', finishError);
+    });
+    request.on('error', finishError);
+    timer = setTimeout(() => {
+        request.abort();
+        finishError(new Error('Artlist 音频下载超时'));
+    }, 10 * 60 * 1000);
+    request.end();
+}
+
 function downloadVideo(task) {
+    if (task.isArtlist) {
+        downloadArtlistAudio(task);
+        return;
+    }
+
     const preferredContainer = getPreferredContainer(task);
     const formatStr = buildDownloadFormatSelector(task, preferredContainer);
     const outputTemplate = createUniqueOutputTemplate(task.title, preferredContainer);

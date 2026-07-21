@@ -1,6 +1,6 @@
 {
   "name": "yt-downloader",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "YT下载器 - Electron 版",
   "main": "main.js",
   "scripts": {
@@ -25,6 +25,7 @@
       "preload.js",
       "icon.ico",
       "icon.png",
+      "lib/**/*",
       "src/**/*"
     ],
     "extraResources": [

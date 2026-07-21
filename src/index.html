@@ -195,7 +195,7 @@
                         <div class="flex items-start justify-between">
                             <div class="flex flex-col gap-2">
                                 <h2 class="text-[24px] font-bold text-[#1A1C1E] tracking-tight">开始新下载</h2>
-                                <p class="text-slate-400 text-[14px]">粘贴来自 YouTube, Vimeo, Bilibili, Pinterest
+                                <p class="text-slate-400 text-[14px]">粘贴来自 YouTube、Vimeo、Bilibili、Artlist
                                     或其他支持站点的链接。
                                 </p>
                             </div>
@@ -362,7 +362,7 @@
                                             <div class="min-w-0">
                                                 <h4 class="font-bold text-[11px] text-[#1A1C1E]">应用更新</h4>
                                                 <div class="flex items-center gap-2">
-                                                    <span id="app-version" class="text-[10px] text-slate-400">v2.0.0</span>
+                                                    <span id="app-version" class="text-[10px] text-slate-400">v1.0.5</span>
                                                     <button onclick="handleCheckAppUpdate()" id="btn-check-app-update"
                                                         class="text-[10px] text-blue-500 hover:text-blue-700 font-bold cursor-pointer">检查更新</button>
                                                 </div>
@@ -529,7 +529,7 @@
                                         <div>
                                             <h3 class="font-bold text-[#1A1C1E] mb-2">粘贴视频链接</h3>
                                             <p class="text-slate-600 text-sm leading-relaxed">
-                                                复制任意支持站点的视频链接（如 YouTube、Vimeo、Bilibili、Pinterest 等），
+                                                复制任意支持站点的链接（如 YouTube、Vimeo、Bilibili、Artlist 等），
                                                 粘贴到顶部输入框中，点击"立即下载"开始解析。
                                             </p>
                                         </div>
@@ -562,8 +562,8 @@
                                     <ul class="text-slate-600 text-sm space-y-2">
                                         <li class="flex items-start gap-2">
                                             <span class="text-primary">•</span>
-                                            <span>支持 1000+ 视频站点，包括 YouTube、Vimeo、Bilibili、Twitter、TikTok、Behance
-                                                等</span>
+                                            <span>支持 1000+ 视频站点，包括 YouTube、Vimeo、Bilibili、Twitter、TikTok、Behance，
+                                                并支持 Artlist 试听音频</span>
                                         </li>
                                         <li class="flex items-start gap-2">
                                             <span class="text-primary">•</span>
@@ -598,7 +598,7 @@
         let currentView = 'all-tasks';
         let behanceExpandedState = {}; // 保存每个任务的 Behance 列表展开状态
         let cookieSyncStatus = null;
-        const APP_VERSION = '1.0.4';
+        const APP_VERSION = '1.0.5';
 
         // ==================== Electron API ====================
         // window.api 由 preload.js 暴露
