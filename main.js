@@ -979,6 +979,27 @@ ipcMain.handle('open-folder', () => {
     return { success: true };
 });
 
+ipcMain.handle('open-output-file-folder', async (event, taskId, filePath) => {
+    const task = activeTasks[taskId] || completedTasks.find((item) => item.task_id === taskId);
+    const resolvedFilePath = path.resolve(String(filePath || ''));
+    const record = getTrackedOutputRecords(task).find((item) => {
+        return path.resolve(item.filePath).toLowerCase() === resolvedFilePath.toLowerCase()
+            && isPathInside(item.outputDir, resolvedFilePath);
+    });
+
+    if (!record) {
+        return { success: false, message: '文件不属于当前任务的已记录输出' };
+    }
+
+    if (fs.existsSync(resolvedFilePath)) {
+        shell.showItemInFolder(resolvedFilePath);
+        return { success: true };
+    }
+
+    const message = await shell.openPath(path.dirname(resolvedFilePath));
+    return message ? { success: false, message } : { success: true };
+});
+
 ipcMain.handle('get-cookie-sync-status', () => getCookieSyncStatus());
 
 ipcMain.handle('open-extension-folder', async () => {
@@ -1566,7 +1587,7 @@ async function parseArtlistTask(task) {
 
     try {
         const parsed = isSafeArtlistAudioUrl(task.url)
-            ? { title: 'artlist_audio', artist: '', songId: '', audioUrl: task.url }
+            ? { title: 'artlist_audio', artist: '', songId: '', audioUrl: task.url, thumbnail: '' }
             : parseArtlistPage(await requestArtlistPage(task), task.url);
         if (!activeTasks[task.task_id] || task._cancelRequested || task._parseRequestId !== requestId) return;
 
@@ -1574,6 +1595,7 @@ async function parseArtlistTask(task) {
         task.title = parsed.artist ? `${parsed.title} - ${parsed.artist}` : parsed.title;
         task.artist = parsed.artist;
         task.song_id = parsed.songId;
+        task.thumbnail = parsed.thumbnail || '';
         task._artlistAudioUrl = parsed.audioUrl;
         task.formats = [{
             format_id: 'artlist-preview',

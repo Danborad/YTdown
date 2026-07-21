@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('api', {
     setOutputDir: (dir) => ipcRenderer.invoke('set-output-dir', dir),
     chooseDirectory: () => ipcRenderer.invoke('choose-directory'),
     openFolder: () => ipcRenderer.invoke('open-folder'),
+    openOutputFileFolder: (taskId, filePath) => ipcRenderer.invoke('open-output-file-folder', taskId, filePath),
 
     // 下载
     startDownload: (url) => ipcRenderer.invoke('start-download', url),

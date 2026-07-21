@@ -362,7 +362,7 @@
                                             <div class="min-w-0">
                                                 <h4 class="font-bold text-[11px] text-[#1A1C1E]">应用更新</h4>
                                                 <div class="flex items-center gap-2">
-                                                    <span id="app-version" class="text-[10px] text-slate-400">v1.0.5</span>
+                                                    <span id="app-version" class="text-[10px] text-slate-400">v1.0.6</span>
                                                     <button onclick="handleCheckAppUpdate()" id="btn-check-app-update"
                                                         class="text-[10px] text-blue-500 hover:text-blue-700 font-bold cursor-pointer">检查更新</button>
                                                 </div>
@@ -598,7 +598,7 @@
         let currentView = 'all-tasks';
         let behanceExpandedState = {}; // 保存每个任务的 Behance 列表展开状态
         let cookieSyncStatus = null;
-        const APP_VERSION = '1.0.5';
+        const APP_VERSION = '1.0.6';
 
         // ==================== Electron API ====================
         // window.api 由 preload.js 暴露
@@ -1368,6 +1368,13 @@
                 deleteRecordBtn.addEventListener('click', () => handleDeleteTask(taskId, false));
             }
 
+            element.querySelectorAll('[data-open-output-folder]').forEach((button) => {
+                button.addEventListener('click', async () => {
+                    const result = await callApi('openOutputFileFolder', taskId, button.dataset.outputFile || '');
+                    if (result && !result.success) showToast(result.message || '打开文件夹失败', 'error');
+                });
+            });
+
             element.querySelectorAll('[data-thumbnail-url]').forEach((image) => {
                 image.addEventListener('error', () => {
                     handleImageError(image, image.dataset.thumbnailUrl || '');
@@ -1388,6 +1395,45 @@
             if (!url) return '';
             const safeUrl = escapeHtml(url);
             return `<img src="${safeUrl}" data-thumbnail-url="${safeUrl}" class="${className}" loading="lazy">`;
+        }
+
+        function getTaskOutputFiles(task) {
+            const files = [];
+            const seen = new Set();
+            const append = (item) => {
+                if (!item || !Array.isArray(item.output_files)) return;
+                item.output_files.forEach((filePath) => {
+                    if (!filePath || seen.has(filePath)) return;
+                    seen.add(filePath);
+                    files.push(filePath);
+                });
+            };
+            append(task);
+            (Array.isArray(task.entries) ? task.entries : []).forEach(append);
+            return files;
+        }
+
+        function renderOutputFiles(task) {
+            const files = getTaskOutputFiles(task);
+            if (files.length === 0) return '';
+
+            const safeTaskId = escapeHtml(task.task_id || '');
+            const rows = files.map((filePath, index) => {
+                const safePath = escapeHtml(filePath);
+                const fileName = String(filePath).split(/[\\/]/).pop() || filePath;
+                return `
+                    <div class="flex items-center gap-2 min-w-0 ${index > 0 ? 'border-t border-slate-100 pt-1' : ''}">
+                        <span class="material-symbols-outlined text-[14px] text-slate-400 shrink-0">draft</span>
+                        <span class="flex-1 min-w-0 text-[11px] text-slate-500 truncate" title="${safePath}">${escapeHtml(fileName)}</span>
+                        <button data-open-output-folder="${safeTaskId}" data-output-file="${safePath}"
+                            class="ml-auto p-1 text-slate-400 hover:text-primary transition-colors shrink-0"
+                            title="打开此文件所在文件夹">
+                            <span class="material-symbols-outlined text-[16px]">folder_open</span>
+                        </button>
+                    </div>`;
+            }).join('');
+
+            return `<div class="mt-2 space-y-1">${rows}</div>`;
         }
 
         async function handleRetryTask(taskId) {
@@ -1462,6 +1508,7 @@
             const progress = Math.round(task.progress || 0);
             const isDownloading = task.status === 'downloading' || task.status === 'processing';
             const isWaiting = task.status === 'waiting';
+            const outputFilesHtml = renderOutputFiles(task);
 
             let formatSelector = '';
 
@@ -1670,6 +1717,7 @@
                             <div class="text-[10px] text-slate-400 font-medium">${escapeHtml(infoStr)}</div>
                         </div>
                         ${behanceEntriesHtml}
+                        ${outputFilesHtml}
                     </div>
                 `;
             } else if (task.status === 'failed' && !isCompleted) { // For active view, show failed status
@@ -1736,6 +1784,7 @@
                             <div class="text-[10px] text-slate-400 font-medium">${escapeHtml(infoStr)}</div>
                         </div>
                         ${behanceEntriesHtml}
+                        ${outputFilesHtml}
                     </div>
                 `;
             }
@@ -1778,13 +1827,10 @@
             return `
                 <div id="${isCompleted ? 'hist-' : ''}task-${safeTaskId}" data-status="${escapeHtml(task.status || '')}" class="bg-white border border-slate-100 rounded-xl p-4 shadow-sm hover:shadow-md transition-all">
                     <div class="flex gap-4">
-                        <div class="w-24 h-16 bg-slate-100 rounded-lg shrink-0 overflow-hidden relative group cursor-pointer" onclick="callApi('openFolder')">
+                        <div class="w-24 h-16 bg-slate-100 rounded-lg shrink-0 overflow-hidden">
                             ${task.thumbnail ?
                     renderThumbnail(thumbUrl, 'w-full h-full object-cover')
                     : '<div class="w-full h-full flex items-center justify-center text-slate-300"><span class="material-symbols-outlined">movie</span></div>'}
-                            <div class="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                                <span class="material-symbols-outlined text-white">folder_open</span>
-                            </div>
                         </div>
                         <div class="flex-1 min-w-0">
                             <div class="flex items-start justify-between gap-2">
