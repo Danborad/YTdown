@@ -236,6 +236,15 @@ async function syncCookies(reason = 'manual') {
             extensionVersion: chrome.runtime.getManifest().version
         });
     } catch (error) {
+        // 自动同步失败时只记录状态，避免后台任务反复把敏感 Cookie 导出到下载目录。
+        if (reason !== 'manual') {
+            await setState({
+                lastError: `无法连接下载器: ${error.message}`,
+                statusText: '自动同步失败，请先打开下载器'
+            });
+            throw error;
+        }
+
         result = await downloadFallbackCookieFile(cookies).catch(() => {
             throw error;
         });
@@ -301,8 +310,8 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
         await syncCookies(alarm.name === 'downloader-pro-cookie-sync' ? 'change' : 'heartbeat');
     } catch (error) {
         await setState({
-            lastError: error.message,
-            statusText: '同步失败'
+            lastError: `无法连接下载器: ${error.message}`,
+            statusText: '自动同步失败，请先打开下载器'
         });
     }
 });
