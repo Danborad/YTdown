@@ -43,6 +43,7 @@ contextBridge.exposeInMainWorld('api', {
     // 系统
     openExternal: (url) => ipcRenderer.invoke('open-external', url),
     getLogs: () => ipcRenderer.invoke('get-logs'),
+    getAppVersion: () => ipcRenderer.invoke('get-app-version'),
     checkAppUpdate: () => ipcRenderer.invoke('check-app-update'),
     getYtdlpVersion: () => ipcRenderer.invoke('get-ytdlp-version'),
     updateCore: () => ipcRenderer.invoke('update-core'),

@@ -598,7 +598,7 @@
         let currentView = 'all-tasks';
         let behanceExpandedState = {}; // 保存每个任务的 Behance 列表展开状态
         let cookieSyncStatus = null;
-        const APP_VERSION = '1.0.8';
+        let APP_VERSION = '1.0.10';
 
         // ==================== Electron API ====================
         // window.api 由 preload.js 暴露
@@ -724,6 +724,8 @@
                 updateCookieSyncUI(syncStatus);
             }
 
+            const appVersion = await callApi('getAppVersion');
+            if (appVersion) APP_VERSION = appVersion;
             const appVersionEl = document.getElementById('app-version');
             if (appVersionEl) appVersionEl.textContent = `v${APP_VERSION}`;
 
@@ -857,6 +859,7 @@
             if (result && !result.success) {
                 showToast(result.error || '开始下载失败', 'error');
             }
+            return result;
         }
 
         async function handleCancelTask(taskId) {
@@ -1189,7 +1192,7 @@
             const container = document.getElementById('completed-tasks-container');
             if (completed && container) {
                 Object.keys(tasks).forEach(id => {
-                    if (['completed', 'failed', 'cancelled'].includes(tasks[id].status)) {
+                    if (tasks[id].status === 'completed') {
                         delete tasks[id];
                     }
                 });
@@ -1250,11 +1253,60 @@
             return Number.isNaN(numericPrefix) ? 0 : numericPrefix;
         }
 
+        function createTaskCardElement(task, isCompleted) {
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = renderTaskCard(task, isCompleted);
+            return tempDiv.firstElementChild;
+        }
+
+        function canReuseTaskElement(existingEl, task) {
+            const prevStatus = existingEl.dataset.status || '';
+            const nextStatus = task.status || '';
+            const isBehanceMulti = Boolean(task.isBehance && task.entries && task.entries.length > 1);
+
+            if (!isBehanceMulti && ['downloading', 'processing'].includes(prevStatus) && ['downloading', 'processing'].includes(nextStatus)) {
+                return true;
+            }
+            if (prevStatus !== nextStatus) {
+                return false;
+            }
+            if (nextStatus === 'failed') {
+                return (existingEl.dataset.errorMessage || '') === (task.error_message || '');
+            }
+            if (isBehanceMulti && nextStatus === 'waiting') {
+                const selectedCountEl = existingEl.querySelector('[data-behance-selected-count]');
+                if (selectedCountEl) {
+                    const selectedCount = task.entries.filter(e => e.selected).length;
+                    selectedCountEl.textContent = `${task.entries.length} 个视频 (已选 ${selectedCount})`;
+                }
+                return true;
+            }
+            return true;
+        }
+
+        function updateBehanceProgressElement(existingEl, task) {
+            const selectedCount = (task.entries || []).filter(e => e.selected).length;
+            const statusTextEl = existingEl.querySelector('[data-behance-progress-summary]');
+            if (statusTextEl) {
+                statusTextEl.textContent = `下载中 ${(task.currentEntryIndex || 0) + 1}/${selectedCount}`;
+            }
+
+            const existingList = existingEl.querySelector('[data-behance-list]');
+            const freshEl = createTaskCardElement(task, false);
+            const freshList = freshEl ? freshEl.querySelector('[data-behance-list]') : null;
+            if (existingList && freshList) {
+                const prevScrollTop = existingList.scrollTop;
+                existingList.innerHTML = freshList.innerHTML;
+                existingList.scrollTop = prevScrollTop;
+            }
+            existingEl.dataset.status = task.status || '';
+        }
+
         function renderTasksToContainer(container, taskList, type) {
             if (!container) return;
 
-            // ID 前缀区分
-            const prefix = type === 'active' ? 'task-' : 'hist-task-';
+            const isCompletedView = type === 'completed';
+            const prefix = isCompletedView ? 'hist-task-' : 'task-';
 
             if (!taskList || taskList.length === 0) {
                 if (type === 'active') {
@@ -1274,15 +1326,39 @@
                 return;
             }
 
-            // 彻底简化：清空后重建所有元素
-            container.innerHTML = '';
+            const targetIds = new Set(taskList.map(task => prefix + task.task_id));
+            Array.from(container.children).forEach(child => {
+                if (!child.id || !targetIds.has(child.id)) {
+                    child.remove();
+                }
+            });
 
-            taskList.forEach(task => {
-                const tempDiv = document.createElement('div');
-                tempDiv.innerHTML = renderTaskCard(task, type === 'completed');
-                const el = tempDiv.firstElementChild;
-                container.appendChild(el);
-                bindTaskEvents(el, task.task_id);
+            taskList.forEach((task, index) => {
+                const elementId = prefix + task.task_id;
+                let cardEl = document.getElementById(elementId);
+
+                if (cardEl && cardEl.parentElement === container && canReuseTaskElement(cardEl, task)) {
+                    const isBehanceMulti = Boolean(task.isBehance && task.entries && task.entries.length > 1);
+                    if (isBehanceMulti && ['downloading', 'processing'].includes(task.status)) {
+                        updateBehanceProgressElement(cardEl, task);
+                    } else if (!isBehanceMulti && ['downloading', 'processing'].includes(task.status)) {
+                        updateTaskElement(cardEl, task);
+                    }
+                } else {
+                    const newEl = createTaskCardElement(task, isCompletedView);
+                    if (cardEl && cardEl.parentElement === container) {
+                        cardEl.replaceWith(newEl);
+                    } else {
+                        container.appendChild(newEl);
+                    }
+                    bindTaskEvents(newEl, task.task_id);
+                    cardEl = newEl;
+                }
+
+                const currentAtPosition = container.children[index];
+                if (currentAtPosition !== cardEl) {
+                    container.insertBefore(cardEl, currentAtPosition || null);
+                }
             });
         }
 
@@ -1297,8 +1373,13 @@
             const downloadBtn = element.querySelector('[data-start-download]');
 
             if (downloadBtn && formatSelect) {
-                downloadBtn.addEventListener('click', () => {
-                    if (formatSelect.value) handleSelectFormat(taskId, formatSelect.value);
+                downloadBtn.addEventListener('click', async () => {
+                    if (!formatSelect.value || downloadBtn.disabled) return;
+                    downloadBtn.disabled = true;
+                    const result = await handleSelectFormat(taskId, formatSelect.value);
+                    if (!result || !result.success) {
+                        downloadBtn.disabled = false;
+                    }
                 });
             }
 
@@ -1338,9 +1419,12 @@
             const behanceDownloadBtn = element.querySelector('[data-behance-download]');
             if (behanceDownloadBtn) {
                 behanceDownloadBtn.addEventListener('click', async () => {
+                    if (behanceDownloadBtn.disabled) return;
+                    behanceDownloadBtn.disabled = true;
                     const result = await callApi('downloadBehanceVideos', taskId);
-                    if (result && !result.success) {
-                        showToast(result.error || '下载失败', 'error');
+                    if (!result || !result.success) {
+                        behanceDownloadBtn.disabled = false;
+                        showToast(result?.error || '下载失败', 'error');
                     }
                 });
             }
@@ -1444,45 +1528,21 @@
         function updateTaskElement(el, task) {
             const progress = Math.round(task.progress || 0);
             const statusTextEl = el.querySelector('.status-text');
-            const statusIconEl = el.querySelector('.status-icon'); // Assuming you add this span
+            const statusIconEl = el.querySelector('.status-icon');
+            const speedSpan = el.querySelector('.task-speed');
+            const etaSpan = el.querySelector('.task-eta');
 
-            if (task.status === 'downloading') {
-                if (statusTextEl) statusTextEl.className = 'text-xs text-blue-600 animate-pulse font-medium status-text';
-                if (statusIconEl) statusIconEl.innerHTML = `
-                    <svg class="animate-spin h-3 w-3 mr-1" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                    下载中...
-                `;
-
-                // Update speed/ETA if available
-                const speedSpan = el.querySelector('.task-speed');
-                const etaSpan = el.querySelector('.task-eta');
-                if (speedSpan && task.speed) speedSpan.innerText = task.speed;
-                if (etaSpan && task.eta) etaSpan.innerText = task.eta ? `剩余 ${task.eta}` : '';
-
-            } else if (task.status === 'completed') {
-                if (statusTextEl) statusTextEl.className = 'text-xs text-green-600 font-medium status-text';
-                if (statusIconEl) statusIconEl.innerHTML = `
-                    <svg class="h-3 w-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
-                    </svg>
-                    已完成
-                `;
-            } else if (task.status === 'failed') {
-                if (statusTextEl) statusTextEl.className = 'text-xs text-red-600 font-medium status-text';
-                const friendlyError = getFriendlyErrorMessage(task.error_message || '未知错误');
-                if (statusIconEl) statusIconEl.innerHTML = `
-                    <svg class="h-3 w-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
-                    </svg>
-                    ${escapeHtml(friendlyError)}
-                `;
-                el.title = task.error_message || ''; // Add a tooltip for detailed error
+            if (task.status === 'downloading' || task.status === 'processing') {
+                const statusLabel = task.status === 'processing' ? '处理中...' : '下载中...';
+                if (statusTextEl) statusTextEl.className = 'text-primary status-text flex items-center status-icon';
+                if (statusIconEl) statusIconEl.textContent = statusLabel;
+                if (speedSpan) speedSpan.textContent = task.status === 'processing' ? '' : (task.speed || '');
+                if (etaSpan) etaSpan.textContent = (task.status !== 'processing' && task.eta) ? `剩余 ${task.eta}` : '';
             } else {
-                if (statusTextEl) statusTextEl.className = 'text-xs text-gray-500 status-text';
-                if (statusIconEl) statusIconEl.innerHTML = getStatusText(task.status);
+                const newEl = createTaskCardElement(task, false);
+                el.replaceWith(newEl);
+                bindTaskEvents(newEl, task.task_id);
+                return;
             }
 
             const progressEl = el.querySelector('.progress-bar-inner');
@@ -1491,14 +1551,7 @@
             const percentEl = el.querySelector('.progress-percent');
             if (percentEl) percentEl.textContent = `${progress}%`;
 
-            if (el.dataset.status !== task.status) {
-                const tempDiv = document.createElement('div');
-                tempDiv.innerHTML = renderTaskCard(task);
-                const newEl = tempDiv.firstElementChild;
-                el.replaceWith(newEl);
-                bindTaskEvents(newEl, task.task_id);
-            }
-            el.dataset.status = task.status; // Update the data-status attribute
+            el.dataset.status = task.status;
         }
 
         function renderTaskCard(task, isCompleted = false) {
@@ -1610,7 +1663,7 @@
                 }).join('');
 
                 const actionButton = isDownloading
-                    ? `<div class="text-xs text-primary font-medium">下载中 ${(task.currentEntryIndex || 0) + 1}/${selectedCount}</div>`
+                    ? `<div data-behance-progress-summary class="text-xs text-primary font-medium">下载中 ${(task.currentEntryIndex || 0) + 1}/${selectedCount}</div>`
                     : `<button data-behance-download="${task.task_id}" class="px-4 py-2 bg-primary text-white text-xs font-bold rounded-lg hover:bg-primary-hover transition-colors">下载选中</button>`;
 
                 formatSelector = `
@@ -1618,7 +1671,7 @@
                         <div class="flex items-center justify-between mb-2">
                             <button data-behance-toggle="${task.task_id}" class="flex items-center gap-1 text-xs text-slate-500 hover:text-primary transition-colors">
                                 <span class="material-symbols-outlined text-[16px] behance-expand-icon">${expandIcon}</span>
-                                <span>${entryCount} 个视频 (已选 ${selectedCount})</span>
+                                <span data-behance-selected-count>${entryCount} 个视频 (已选 ${selectedCount})</span>
                             </button>
                             ${actionButton}
                         </div>
@@ -1825,7 +1878,7 @@
             const thumbUrl = task.thumbnail || '';
 
             return `
-                <div id="${isCompleted ? 'hist-' : ''}task-${safeTaskId}" data-status="${escapeHtml(task.status || '')}" class="bg-white border border-slate-100 rounded-xl p-4 shadow-sm hover:shadow-md transition-all">
+                <div id="${isCompleted ? 'hist-' : ''}task-${safeTaskId}" data-status="${escapeHtml(task.status || '')}" data-error-message="${escapeHtml(task.error_message || '')}" class="bg-white border border-slate-100 rounded-xl p-4 shadow-sm hover:shadow-md transition-all">
                     <div class="flex gap-4">
                         <div class="w-24 h-16 bg-slate-100 rounded-lg shrink-0 overflow-hidden">
                             ${task.thumbnail ?

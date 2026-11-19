@@ -7,7 +7,6 @@ const { app, BrowserWindow, ipcMain, dialog, shell, session, net } = require('el
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
-const https = require('https');
 const nodeNet = require('net');
 const crypto = require('crypto');
 const { spawn, execFile, spawnSync } = require('child_process');
@@ -336,31 +335,68 @@ function compareVersions(left, right) {
 
 function fetchJson(url) {
     return new Promise((resolve, reject) => {
-        const request = https.get(url, {
-            headers: {
-                'User-Agent': 'YTDownloader-App',
-                'Accept': 'application/vnd.github+json'
-            }
-        }, (response) => {
-            let body = '';
-            response.on('data', (chunk) => {
-                body += chunk;
-            });
-            response.on('end', () => {
-                if (response.statusCode < 200 || response.statusCode >= 300) {
-                    reject(new Error(`GitHub API 请求失败: ${response.statusCode}`));
+        let settled = false;
+        let timer = null;
+        let totalBytes = 0;
+        const chunks = [];
+        const request = net.request({ method: 'GET', url });
+
+        const finish = (error, value) => {
+            if (settled) return;
+            settled = true;
+            if (timer) clearTimeout(timer);
+            if (error) reject(error);
+            else resolve(value);
+        };
+
+        request.setHeader('User-Agent', 'YTDownloader-App');
+        request.setHeader('Accept', 'application/vnd.github+json');
+
+        request.on('redirect', (statusCode, method, redirectUrl) => {
+            try {
+                const parsed = new URL(redirectUrl);
+                if (parsed.protocol !== 'https:') {
+                    request.abort();
+                    finish(new Error('更新请求重定向到了非 HTTPS 地址'));
                     return;
                 }
-
-                try {
-                    resolve(JSON.parse(body));
-                } catch (error) {
-                    reject(error);
-                }
-            });
+                request.followRedirect();
+            } catch (error) {
+                request.abort();
+                finish(new Error('更新请求重定向地址无效'));
+            }
         });
 
-        request.on('error', reject);
+        request.on('response', (response) => {
+            if (response.statusCode < 200 || response.statusCode >= 300) {
+                request.abort();
+                finish(new Error(`GitHub API 请求失败: ${response.statusCode}`));
+                return;
+            }
+            response.on('data', (chunk) => {
+                totalBytes += chunk.length;
+                if (totalBytes > 2 * 1024 * 1024) {
+                    request.abort();
+                    finish(new Error('GitHub API 响应体过大'));
+                    return;
+                }
+                chunks.push(chunk);
+            });
+            response.on('end', () => {
+                try {
+                    finish(null, JSON.parse(Buffer.concat(chunks).toString('utf8')));
+                } catch (error) {
+                    finish(error);
+                }
+            });
+            response.on('error', finish);
+        });
+
+        request.on('error', finish);
+        timer = setTimeout(() => {
+            request.abort();
+            finish(new Error('检查更新超时，请检查网络连接'));
+        }, 15000);
         request.end();
     });
 }
@@ -891,6 +927,7 @@ ipcMain.handle('get-logs', () => systemLogs);
 
 // 获取 yt-dlp 版本
 ipcMain.handle('get-ytdlp-version', () => ytdlpVersion);
+ipcMain.handle('get-app-version', () => packageJson.version);
 
 ipcMain.handle('check-app-update', async () => {
     try {
@@ -1202,6 +1239,9 @@ ipcMain.handle('select-format-and-download', (event, taskId, formatId) => {
     if (!task) {
         return { success: false, error: '任务不存在' };
     }
+    if (task.status !== 'waiting') {
+        return { success: false, error: '当前任务状态不可开始下载' };
+    }
 
     task.format_id = formatId;
     task.status = 'downloading';
@@ -1286,6 +1326,15 @@ ipcMain.handle('cancel-task', async (event, taskId) => {
 ipcMain.handle('retry-task', (event, taskId) => {
     const task = activeTasks[taskId];
     if (task && (task.status === 'failed' || task.status === 'parsing')) {
+        if (task._process) {
+            terminateProcessTree(task._process, 'Retry');
+            task._process = null;
+        }
+        if (task._request) {
+            task._request.abort();
+            task._request = null;
+        }
+        task._cancelRequested = false;
         task.status = 'parsing';
         task.error_message = '';
         sendTaskUpdate(task);
@@ -1328,6 +1377,9 @@ ipcMain.handle('download-behance-videos', (event, taskId) => {
     const task = activeTasks[taskId];
     if (!task || !task.entries) {
         return { success: false, error: '任务不存在' };
+    }
+    if (task.status !== 'waiting') {
+        return { success: false, error: '当前任务状态不可开始下载' };
     }
 
     const selectedEntries = task.entries.filter(e => e.selected);
@@ -1379,6 +1431,22 @@ ipcMain.handle('download-image', async (event, url) => {
             const request = net.request(processedUrl);
             request.setHeader('Referer', getImageReferer(processedUrl));
             request.setHeader('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+            request.on('redirect', (statusCode, method, redirectUrl) => {
+                try {
+                    const parsedRedirect = new URL(redirectUrl);
+                    if (!isSafeProxyImageUrl(parsedRedirect)) {
+                        log('WARN', `图片代理: 拒绝不安全重定向 ${parsedRedirect.hostname}`);
+                        request.abort();
+                        finish(null);
+                        return;
+                    }
+                    request.setHeader('Referer', getImageReferer(redirectUrl));
+                    request.followRedirect();
+                } catch (error) {
+                    request.abort();
+                    finish(null);
+                }
+            });
             timeout = setTimeout(() => {
                 log('WARN', `图片代理: 请求超时 ${parsedUrl.hostname}`);
                 request.abort();
@@ -2209,11 +2277,32 @@ function recordTaskOutputFile(target, filePath) {
     }
 }
 
+function removeFileSafely(targetPath, retryOnBusy = true) {
+    if (!targetPath) return;
+    try {
+        if (fs.existsSync(targetPath)) {
+            fs.rmSync(targetPath, { force: true });
+            log('INFO', `[Cancel] 已清理临时文件: ${targetPath}`);
+        }
+    } catch (error) {
+        if (retryOnBusy) {
+            setTimeout(() => removeFileSafely(targetPath, false), 300);
+        } else {
+            log('WARN', `[Cancel] 清理临时文件失败: ${error.message}`);
+        }
+    }
+}
+
 function cleanupCancelledArtifacts(task) {
     try {
+        if (task._tempFile) {
+            removeFileSafely(task._tempFile);
+            task._tempFile = null;
+        }
+
         const safeBaseName = sanitizeFileBase(task.title);
-        const outputDir = config.output_dir;
-        if (!fs.existsSync(outputDir)) return;
+        const outputDir = task.output_dir || config.output_dir;
+        if (!outputDir || !fs.existsSync(outputDir)) return;
 
         const entries = fs.readdirSync(outputDir);
         entries.forEach((name) => {
@@ -2221,9 +2310,7 @@ function cleanupCancelledArtifacts(task) {
             const matchesBase = name.startsWith(safeBaseName);
             const isTemp = lowerName.endsWith('.part') || lowerName.endsWith('.ytdl') || lowerName.endsWith('.temp');
             if (matchesBase && isTemp) {
-                const fullPath = path.join(outputDir, name);
-                fs.rmSync(fullPath, { force: true });
-                log('INFO', `[Cancel] 已清理临时文件: ${fullPath}`);
+                removeFileSafely(path.join(outputDir, name));
             }
         });
     } catch (error) {
@@ -2325,20 +2412,19 @@ function downloadArtlistAudio(task) {
     const startedAt = Date.now();
 
     const cleanupTemp = () => {
-        if (!tempPath) return;
-        try {
-            if (fs.existsSync(tempPath)) fs.rmSync(tempPath, { force: true });
-        } catch (error) {
-            log('WARN', `[Artlist] 清理临时文件失败: ${error.message}`);
-        }
+        removeFileSafely(tempPath);
     };
 
     const finishError = (error) => {
         if (settled) return;
         settled = true;
         if (timer) clearTimeout(timer);
-        if (stream) stream.destroy();
-        cleanupTemp();
+        const activeStream = stream;
+        if (activeStream) {
+            activeStream.close(() => cleanupTemp());
+        } else {
+            cleanupTemp();
+        }
         if (task._request === request) task._request = null;
         if (task._downloadStream === stream) task._downloadStream = null;
         if (task._tempFile === tempPath) task._tempFile = null;
@@ -2476,7 +2562,7 @@ function downloadVideo(task) {
         task.url
     ];
     if (preferredContainer === 'mp4') {
-        args.splice(args.length - 1, 0, '--recode-video', 'mp4');
+        args.splice(args.length - 1, 0, '--merge-output-format', 'mp4', '--remux-video', 'mp4');
     } else {
         args.splice(args.length - 1, 0, '--merge-output-format', preferredContainer);
     }
@@ -2501,6 +2587,17 @@ function downloadVideo(task) {
     let stderrOutput = '';
 
     const outputParser = createYtdlpOutputParser(task, (line) => {
+        if (/^\[(?:Merger|VideoRemuxer|ExtractAudio|EmbedThumbnail|Fixup[^\]]*)\]/.test(line.trim())) {
+            if (!task._cancelRequested && task.status !== 'processing') {
+                task.status = 'processing';
+                task.progress = 100;
+                task.speed = '';
+                task.eta = '';
+                sendTaskUpdate(task);
+            }
+            return;
+        }
+
         // 解析进度, 速度, ETA
         // [download]  23.5% of 10.00MiB at 2.50MiB/s ETA 00:05
         const match = line.match(/\[download\]\s+([\d.]+)%/);
@@ -2594,6 +2691,8 @@ function downloadBehanceVideos(task) {
     }
 
     // 初始化选中的 entry 状态
+    task._cancelRequested = false;
+    task._cancelledProcessPid = 0;
     selectedEntries.forEach(e => {
         e.status = 'waiting';
         e.progress = 0;
@@ -2602,8 +2701,20 @@ function downloadBehanceVideos(task) {
     let currentIndex = 0;
 
     function downloadNextEntry() {
+        if (task._cancelRequested || task.status === 'cancelled') {
+            return;
+        }
+
         if (currentIndex >= selectedEntries.length) {
-            // 全部下载完成
+            const completedEntries = selectedEntries.filter(e => e.status === 'completed');
+            if (completedEntries.length === 0) {
+                task.status = 'failed';
+                task.error_message = '选中视频全部下载失败';
+                sendTaskUpdate(task);
+                return;
+            }
+
+            // 全部或部分下载完成
             task.status = 'completed';
             task.finishTime = new Date().toISOString();
             task.progress = 100;
@@ -2675,7 +2786,7 @@ function downloadBehanceVideos(task) {
             '--print', `after_move:${YTDLP_OUTPUT_MARKER}%(filepath)s`,
             entry.url
         ];
-        args.splice(args.length - 1, 0, '--recode-video', 'mp4');
+        args.splice(args.length - 1, 0, '--merge-output-format', 'mp4', '--remux-video', 'mp4');
         appendPreferredJsRuntime(args);
 
         const activeCookieFile = resolveActiveCookieFile();
@@ -2685,7 +2796,6 @@ function downloadBehanceVideos(task) {
 
         const proc = spawn(getYtdlpExePath(), args, { env: getChildProcessEnv(), windowsHide: true });
         task._process = proc;
-        task._cancelRequested = false;
         task._cancelledProcessPid = 0;
         let stderrOutput = '';
 
