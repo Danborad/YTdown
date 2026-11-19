@@ -14,7 +14,11 @@ const { spawn, execFile, spawnSync } = require('child_process');
 const packageJson = require('./package.json');
 const {
     USER_AGENT: ART_LIST_USER_AGENT,
+    ARTLIST_GRAPHQL_ENDPOINTS,
     isArtlistUrl,
+    extractArtlistTrackInfo,
+    buildArtlistGraphqlRequest,
+    parseArtlistGraphqlResponse,
     parseArtlistPage,
     guessArtlistExtension,
     isSafeArtlistAudioUrl
@@ -894,7 +898,7 @@ ipcMain.handle('check-app-update', async () => {
         const latestVersion = normalizeVersion(release.tag_name || release.name || '');
         const currentVersion = normalizeVersion(packageJson.version);
         const installerAsset = Array.isArray(release.assets)
-            ? release.assets.find(asset => /setup .*\.exe$/i.test(asset.name || ''))
+            ? release.assets.find(asset => /setup[.\s_-]*.*\.exe$/i.test(asset.name || ''))
             : null;
 
         if (!latestVersion) {
@@ -1522,13 +1526,21 @@ function normalizeYtdlpErrorMessage(message, task) {
     return rawMessage;
 }
 
-function requestArtlistPage(task) {
+function executeArtlistNetRequest(task, {
+    method = 'GET',
+    url,
+    headers = {},
+    body = null,
+    maxBytes = 20 * 1024 * 1024,
+    timeoutMs = 45000,
+    errorLabel = 'Artlist 请求'
+}) {
     return new Promise((resolve, reject) => {
         let settled = false;
         let timer = null;
         const chunks = [];
         let totalBytes = 0;
-        const request = net.request({ method: 'GET', url: task.url });
+        const request = net.request({ method, url });
         task._request = request;
 
         const finish = (error, value) => {
@@ -1540,28 +1552,33 @@ function requestArtlistPage(task) {
             else resolve(value);
         };
 
-        request.setHeader('User-Agent', ART_LIST_USER_AGENT);
-        request.setHeader('Accept', 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8');
-        request.setHeader('Accept-Language', 'zh-CN,zh;q=0.9,en;q=0.8');
-        request.on('redirect', (statusCode, method, redirectUrl) => {
-            if (!isArtlistUrl(redirectUrl)) {
+        Object.entries(headers).forEach(([key, value]) => {
+            request.setHeader(key, value);
+        });
+
+        request.on('redirect', (statusCode, redirectMethod, redirectUrl) => {
+            if (method !== 'GET' || !isArtlistUrl(redirectUrl)) {
                 request.abort();
-                finish(new Error('Artlist 页面重定向到了不受支持的地址'));
+                finish(new Error(`${errorLabel}重定向到了不受支持的地址`));
                 return;
             }
             request.followRedirect();
         });
+
         request.on('response', (response) => {
             if (response.statusCode < 200 || response.statusCode >= 300) {
                 request.abort();
-                finish(new Error(`Artlist 页面请求失败（HTTP ${response.statusCode}）`));
+                const error = new Error(`${errorLabel}失败（HTTP ${response.statusCode}）`);
+                error.statusCode = response.statusCode;
+                finish(error);
                 return;
             }
+
             response.on('data', (chunk) => {
                 totalBytes += chunk.length;
-                if (totalBytes > 20 * 1024 * 1024) {
+                if (totalBytes > maxBytes) {
                     request.abort();
-                    finish(new Error('Artlist 页面超过大小限制'));
+                    finish(new Error(`${errorLabel}超过大小限制`));
                     return;
                 }
                 chunks.push(chunk);
@@ -1569,13 +1586,115 @@ function requestArtlistPage(task) {
             response.on('end', () => finish(null, Buffer.concat(chunks).toString('utf8')));
             response.on('error', (error) => finish(error));
         });
+
         request.on('error', (error) => finish(error));
         timer = setTimeout(() => {
             request.abort();
-            finish(new Error('Artlist 页面请求超时'));
-        }, 45000);
+            finish(new Error(`${errorLabel}超时`));
+        }, timeoutMs);
+
+        if (body !== null && body !== undefined) {
+            request.write(body);
+        }
         request.end();
     });
+}
+
+function requestArtlistPage(task) {
+    return executeArtlistNetRequest(task, {
+        method: 'GET',
+        url: task.url,
+        headers: {
+            'User-Agent': ART_LIST_USER_AGENT,
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8'
+        },
+        maxBytes: 20 * 1024 * 1024,
+        timeoutMs: 45000,
+        errorLabel: 'Artlist 页面请求'
+    });
+}
+
+async function queryArtlistGraphql(task, kind, id, requestId) {
+    const payload = JSON.stringify(buildArtlistGraphqlRequest(kind, id));
+    let lastError = null;
+
+    for (const endpoint of ARTLIST_GRAPHQL_ENDPOINTS) {
+        if (!activeTasks[task.task_id] || task._cancelRequested || task._parseRequestId !== requestId) {
+            return null;
+        }
+        try {
+            const responseText = await executeArtlistNetRequest(task, {
+                method: 'POST',
+                url: endpoint,
+                headers: {
+                    'User-Agent': ART_LIST_USER_AGENT,
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                    'Origin': 'https://artlist.io',
+                    'Referer': 'https://artlist.io/'
+                },
+                body: payload,
+                maxBytes: 5 * 1024 * 1024,
+                timeoutMs: 30000,
+                errorLabel: 'Artlist 接口请求'
+            });
+            return parseArtlistGraphqlResponse(JSON.parse(responseText), kind, task.url);
+        } catch (error) {
+            lastError = error;
+            log('WARN', `[parseArtlistTask] ${endpoint} (${kind}) 查询失败: ${error.message}`);
+        }
+    }
+
+    if (lastError) throw lastError;
+    return null;
+}
+
+async function resolveArtlistTrack(task, requestId) {
+    if (isSafeArtlistAudioUrl(task.url)) {
+        return { title: 'artlist_audio', artist: '', songId: '', audioUrl: task.url, thumbnail: '' };
+    }
+
+    const trackInfo = extractArtlistTrackInfo(task.url);
+    if (trackInfo) {
+        let graphqlError = null;
+        for (const kind of [trackInfo.primaryKind, trackInfo.fallbackKind].filter(Boolean)) {
+            if (!activeTasks[task.task_id] || task._cancelRequested || task._parseRequestId !== requestId) {
+                return null;
+            }
+            try {
+                const parsed = await queryArtlistGraphql(task, kind, trackInfo.id, requestId);
+                if (parsed) return parsed;
+            } catch (error) {
+                graphqlError = error;
+            }
+        }
+
+        // GraphQL 未命中或异常时，仍尝试页面 HTML 解析作为兜底。
+        try {
+            if (!activeTasks[task.task_id] || task._cancelRequested || task._parseRequestId !== requestId) {
+                return null;
+            }
+            return parseArtlistPage(await requestArtlistPage(task), task.url);
+        } catch (pageError) {
+            if (pageError.statusCode === 403 && graphqlError) {
+                throw graphqlError;
+            }
+            if (pageError.statusCode === 403) {
+                throw new Error('Artlist 未找到该曲目的试听音频，且网页端受站点验证拦截（HTTP 403）');
+            }
+            throw pageError;
+        }
+    }
+
+    try {
+        return parseArtlistPage(await requestArtlistPage(task), task.url);
+    } catch (error) {
+        if (error.statusCode === 403) {
+            throw new Error('Artlist 页面受站点验证拦截（HTTP 403），请粘贴带曲目数字 ID 的音乐/音效链接或音频直链');
+        }
+        throw error;
+    }
 }
 
 async function parseArtlistTask(task) {
@@ -1586,10 +1705,8 @@ async function parseArtlistTask(task) {
     log('INFO', `[parseArtlistTask] 开始解析: ${task.url}`);
 
     try {
-        const parsed = isSafeArtlistAudioUrl(task.url)
-            ? { title: 'artlist_audio', artist: '', songId: '', audioUrl: task.url, thumbnail: '' }
-            : parseArtlistPage(await requestArtlistPage(task), task.url);
-        if (!activeTasks[task.task_id] || task._cancelRequested || task._parseRequestId !== requestId) return;
+        const parsed = await resolveArtlistTrack(task, requestId);
+        if (!parsed || !activeTasks[task.task_id] || task._cancelRequested || task._parseRequestId !== requestId) return;
 
         task.isArtlist = true;
         task.title = parsed.artist ? `${parsed.title} - ${parsed.artist}` : parsed.title;
